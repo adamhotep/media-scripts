@@ -1,0 +1,306 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+# This script does not use Getopt::Long or others because it has special
+# processing to swap presets with their definitions. 
+# Also, Getopt::Long can't deal with optional arguments.
+# HandBrakeCLI itself can't deal with combined single-dash arguments.
+
+my $name = 'handbrakex';
+my $ver = $name.' 0.2+20140127 by Adam Katz <www.khopis.com/scripts>, GPLv2+';
+
+sub do_help {
+  print <<end_help;
+A wrapper around HandBrakeCLI with advanced preset handling.
+Usage: $name [options] -o <file>
+  -h, --help             Display this help
+  --handbrake <file>     The location of the HandBrakeCLI binary
+  --log <file>           An output file to send logs of the encode progress
+  --no-color             Prevent coloring output (default: auto)
+  --noop                 Do nothing, just spit out the final command
+  --preset-names         Output all preset names
+  --real-help            Get help for any HandBrakeCLI option
+  --real-version         Get the version of HandBrakeCLI
+  -V, --version          Display the version of $name (this wrapper)
+
+  (All other options can be referenced via --real-help)
+
+$ver
+end_help
+}
+
+my $log = "";
+
+sub record {
+  return 1 unless $log;
+  my $date = scalar(localtime(time));
+  my $time = $date;
+  $time =~ s/.*(\d\d:\d\d:\d\d).*/$1/;
+  $_ = join(" ", @_);
+  s/\`date\`/$date/g;
+  s/\`time\`/$time/g;
+  chomp;
+  print LOG "$_\n";
+}
+
+# variables in ALL_CAPS are used as globals (subroutines use and modify them)
+
+my $HANDBRAKE = "HandBrakeCLI";
+my $LOCAL_PRESETS = sprintf("%s/.%s.presets", $ENV{HOME}, $name);
+
+my $all_presets = "";
+my %presets = ();
+my @sorted_presets = ();
+my $input = "";
+my $output = "";
+my $do_nothing = 0;
+my $colorize = 0;
+my $list_presets = 0;
+my $verbose = 0;
+
+########################################
+# Gather presets
+
+sub gather_presets {
+
+  my $preset_list = "";
+
+  if (open(OFFICIAL_PRESETS, "$HANDBRAKE --preset-list 2>/dev/null |")) {
+    while(<OFFICIAL_PRESETS>) {
+      chomp;
+      $preset_list .= $_ . "\n";
+    }
+  }
+
+  $preset_list .= <<'end_x_presets';
+
+< Extra
+
+  + 30to24:  --deinterlace slower --detelecine --vfr
+
+  + extra-sm: --verbose  --format mkv --markers  --encoder x264 --quality 23.6 --encopts "weightb=0:psy-rd=1|0.2:partitions=all:trellis=2:ref=6:bframes=5:b-adapt=2:direct=auto:subme=10:rc-lookahead=60:me=umh:merange=26:deblock=1,2"  --vfr --loose-anamorphic --modulus 16 --denoise weak  --aencoder vorbis --aq 0.0 --mixdown dpl2 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+
+  + extra-std: --verbose  --format mkv --markers  --encoder x264 --quality 20.0 --encopts "weightb=0:psy-rd=1|0.2:partitions=all:trellis=2:ref=6:bframes=5:b-adapt=2:direct=auto:subme=10:rc-lookahead=60:me=umh:merange=26:deblock=0,1"  --vfr --loose-anamorphic --modulus 8  --aencoder vorbis --aq 4.0 --mixdown 5point1 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+
+  + nocrop: --crop 0:0:0:0
+
+>
+
+< Custom
+
+end_x_presets
+
+  if (-s $LOCAL_PRESETS) {
+    $preset_list .= qq(# These are taken from "$LOCAL_PRESETS"\n\n);
+    open(LOCAL_PRESETS, "<", $LOCAL_PRESETS) or die $!;
+    while(<LOCAL_PRESETS>) {
+      chomp;
+      $preset_list .= $_ . "\n";
+    }
+  } else {
+    $preset_list .= qq(# You can add your own presets to "$LOCAL_PRESETS"\n);
+  }
+
+  $preset_list .= "\n>\n";
+
+  # Parse presets
+  for (split("\n", $preset_list)) {
+    chomp;
+    next unless /^\s*\+\s+([^:]+):\s*([^#]+)$/;
+    my ($name, $def) = ($1, $2);
+    if ($presets{$name}) {
+      print STDERR "WARNING: multiple presets named $name, using last one.\n";
+    }
+    $presets{$name} = $def;
+    push(@sorted_presets, $name);
+  }
+
+  # If direct output & colors are encouraged, color presests
+  if (-t 1 and ($ENV{PS1} and $ENV{PS1} =~ /\/
+                or $ENV{TERM} =~ /color/ or $ENV{LS_COLORS} or $ENV{GREP_COLOR}
+                or $ENV{GREP_OPTIONS} =~ /--colou?r(?!=never)/i)) {
+    $colorize = 1;
+  }
+
+  return $preset_list;
+
+}
+
+$all_presets = gather_presets;
+
+# Done gathering presets
+########################################
+
+
+
+########################################
+# Parse arguments
+
+# This is done by hand for flexibility, see the comments up top
+
+my @new_args = ();
+
+# return the next element or else an empty string
+sub next_elem {
+  my $i = shift;
+  $i++;
+  if ($i < int(@ARGV)) { return $ARGV[$i]; }
+  else { return ""; }
+}
+
+
+for (my $a = 0; $a < int(@ARGV); $a++) {
+  $_ = $ARGV[$a];
+  #if (not /^-(?!-?$)/) { last; }
+
+  if (/^--real-help/i) { unshift(@new_args, "--help"); }
+  elsif (/^--real-ver/i) { unshift(@new_args, "--version"); }
+  elsif (/^(?:-h|--(?i)help)/) { do_help; exit 0; }
+  elsif (/^(?:-V|--(?i)ver(?:$|s))/) { print "$ver\n"; exit 0; }
+
+  elsif (/^--hand-?brake(?:=|$)(.*)/i) {
+    $HANDBRAKE = $1;
+    unless ($HANDBRAKE) {
+      $HANDBRAKE = next_elem $a;
+      $a++;
+    }
+    die qq("$HANDBRAKE" is not executable) unless -x $HANDBRAKE;
+    $all_presets = gather_presets;
+  }
+
+  elsif (/^(-i|--input=?)(.*)$/) {
+    ($_, $input) = ($1, $2);
+    if ($input) {
+      push(@new_args, "--input", qq/"$input"/);
+    } elsif (next_elem $a) {
+      $input = next_elem $a;
+      push(@new_args, $_, qq/"$input"/);
+      $a++;
+    }
+  }
+
+  elsif (/^--log[^=]*(?:=|$)(.*)/) {
+    if ($1 =~ /./) { # allow --log=0
+      $log = $1;
+    } elsif (next_elem $a and next_elem $a !~ /^-/) {
+      $log = next_elem $a;
+      $a++;
+    } else {
+      $log = "//default log location//";
+    }
+  }
+
+  elsif (/^--no-?colou?r/i) { $colorize = 0; }
+
+  elsif (/^--no-?op/i) { $do_nothing = 1; }
+
+  elsif (/^(-o|--output=?)(.*)$/) {
+    ($_, $output) = ($1, $2);
+    if ($output) {
+      push(@new_args, "--output", qq/"$output"/);
+    } elsif (next_elem $a) {
+      $output = next_elem $a;
+      push(@new_args, $_, qq/"$output"/);
+      $a++;
+    }
+  }
+
+  elsif (/^(-z|--(?i)preset-list)/) { push(@new_args, $1); $list_presets = 1; }
+  elsif (/^--preset-name/i) { print join("\n", @sorted_presets) . "\n"; exit 0 }
+
+  elsif (/^(?:-Z|(?i)--preset(?:=|$))(.*)/) {
+    my $preset = $1;
+    unless ($preset) {
+      $preset = next_elem $a;
+      $a++;
+    }
+
+    unless ($presets{$preset}) {
+      die qq(Undefined preset "$preset");
+    }
+
+    # Properly traverse quotations and retain spacing
+    $_ = sprintf("  %s ", $presets{$preset});
+    while(/\s*([^\s"']*(?:'[^']*'[^\s']*|"[^"]*"[^\s"]*)*)/g) {
+      push(@new_args, $1);
+    }
+
+  }
+
+  elsif (/^(?:-v|--verbos[^=]*=?)(\d*)$/) {
+    $verbose = $1; # verbose may be 0 (to disable)
+    if ($verbose !~ /./ and next_elem $a =~ /^\d+$/) {
+      $verbose = next_elem $a;
+      $a++;
+    }
+    push(@new_args, "--verbose", $verbose) if $verbose;
+  }
+
+  else {
+    push(@new_args, qq/"$_" /);
+  }
+
+}
+
+
+if ($input eq "") {
+  for (qw(/dev/dvd /dev/dvdrw /dev/cdrom /dev/cdrw /dev/dvd0 /dev/dvd1 /dev/cdrom0 /dev/cdrom1 /dev/sr0 /dev/sr1), "") {
+    if (-r $_) {
+      $input = $_;
+      last;
+    }
+  }
+}
+if ($input eq "") {
+  die "Failed to autodetect input device. Specify it with --input (see --help)";
+} elsif (not -r $input) {
+  die qq/Input device "$input" cannot be read.  Is it valid?/;
+}
+
+$HANDBRAKE .= qq/ --input "$input"/;
+
+if ($log) {
+  $HANDBRAKE .= " --verbose";
+  if ($log eq "//default log location//") {
+    $log = $output;
+    $log =~ s/\.[^.]+$//;
+    my @time = localtime(time);
+    $log = sprintf("%s %04d-%02d-%02d %02d-%02d-%02d.log", $log,
+      $time[5] + 1900, $time[4] + 1, $time[3], $time[2], $time[1], $time[0]);
+  }
+  print qq/Logging to "$log"\n/;
+  open(LOG, "> $log") or die $!;
+  record "[`time`] $name wrapper script initiated at `date`";
+  record $ver;
+}
+
+if ($list_presets) {
+  if ($colorize) {
+    $all_presets =~ s/^(\s*\+\s+)([^:]+)(:[^\n#]+)/$1\e[1;32m$2\e[0;0m$3/gm;
+    $all_presets =~ s/(#[^\n]*)/\e[0;37m$1\e[0;0m/gm;
+  }
+  print $all_presets;
+  exit 0;
+}
+
+$HANDBRAKE .= " " . join(" ", @new_args) . "\n";
+
+record "[`time`] $name will run: $HANDBRAKE";
+
+if ($do_nothing) {
+  record "[`time`] $name: done (no-op run)";
+  print $HANDBRAKE;
+} else {
+  open(RUN, "$HANDBRAKE 2>&1 |") or die $!;
+  while(<RUN>) {
+    record $_;
+    if ($colorize) {
+      s/((?:error|warn|skip)(?:.?(?:ed|ing))?s?)/\e[1;31m$1\e[0;0m/g;
+    }
+    print unless $log and not $verbose and not /\[[0-9:]{8}\]/;
+  }
+  close RUN;
+  exit $? >> 8;
+}
