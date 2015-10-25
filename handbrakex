@@ -246,7 +246,8 @@ for (my $a = 0; $a < int(@ARGV); $a++) {
 
 
 if ($input eq "") {
-  for (qw(/dev/dvd /dev/dvdrw /dev/cdrom /dev/cdrw /dev/dvd0 /dev/dvd1 /dev/cdrom0 /dev/cdrom1 /dev/sr0 /dev/sr1), "") {
+  for (qw( /dev/dvd /dev/dvdrw /dev/cdrom /dev/cdrw /dev/dvd0 /dev/dvd1
+           /dev/cdrom0 /dev/cdrom1 /dev/sr0 /dev/sr1), "") {
     if (-r $_) {
       $input = $_;
       last;
