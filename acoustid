@@ -1,0 +1,355 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use open qw(:std :utf8);
+use Getopt::Long qw(:config no_ignore_case bundling);
+use Time::HiRes qw(sleep);
+use LWP::Simple qw(get);
+use HTML::Entities qw(decode_entities);
+use JSON;
+
+my $fpcalc = "fpcalc";
+my $command = $0;
+my ($path) = $command =~ m"^(.+)/+[^/]*$";
+
+my %args = ();
+my $last_title = "";
+
+for (split(":", $ENV{PATH})) {
+  s:/+$::;
+  if ($_ eq $path) {
+    $command =~ s:^$path/*::;
+    last;
+  }
+}
+
+my $name =	"acoustid-lookup";
+my $version =	"1.0+20151101";
+my $one_liner = "Identify audio files by their AcoustID fingerprints.";
+my $usage =	"Usage: $command [OPTIONS] FILE [FILE...]";
+
+sub do_help {
+  print <<end_help;
+$one_liner
+$usage
+  -NUM    Stop after NUM matches (NUM must be 1-9)
+  -a KEY  API key (please obtain your own key if you have a high volume)
+  -c      Force colors (default is auto, taken from \$GREP_OPTIONS)
+  -C      Disable colors (default is auto, taken from \$GREP_OPTIONS)
+  -f      Show fingerprint (these are long, off by default)
+  -F      Show fingerprint only
+  -h      Suppress the file name (default when given only one file)
+  -H      Always show the file name (default when given 2+ files)
+  -L      Suppress links
+  -m NUM  Stop after NUM matches (default=50)
+  -v      Verbose:  show "Not Found" ID links
+
+For a larger list, use xargs.  Here are two examples:
+
+    find ... -print0 |xargs -0 $command
+    cat list-of-songs.m3u |xargs -d '\\n' $command
+
+end_help
+
+  do_version();
+}
+
+sub do_version {
+  print "$name $version Copyright 2014+ by Adam Katz, LGPLv2.1+\n";
+}
+
+sub do_license {
+  print "$one_liner\n";
+  do_version();
+  print <<end_license;
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU Lesser General Public License as
+published by the Free Software Foundation; either version 2.1 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+Lesser General Public License at <http://gnu.org/licenses> for detail.
+end_license
+}
+
+# given an ID, the last title, and the arguments, return the title of the ID
+sub parse_recording {
+  my $id = shift;
+  my $hit_count = shift;
+  my $result = "";
+  my $musicbrainz_uri = "https://musicbrainz.org/recording/$id";
+
+  if ($hit_count >= $args{max}) {
+    $result = sprintf(
+                "(%squery limit of %d exceeded, unqueried results follow%s)",
+                $args{hit_color}, $args{max}, $args{no_color});
+    if ($result eq $last_title) {
+      $result = "";
+    } else {
+      $last_title = $result;
+      $result .= "\n";
+    }
+    return "$result    $musicbrainz_uri\n";
+  }
+
+  my $musicbrainz = get($musicbrainz_uri);
+
+  $musicbrainz ||= "<title>Not Found - MusicBrainz</title";
+
+  next if $musicbrainz !~ m"<title>(?:Recording )?(.*) - MusicBrainz</title>";
+
+  my $title = $1;
+
+  next if $title eq "Not Found" and not $args{verbose};
+
+  $title = $args{hit_color} . decode_entities($title) . $args{no_color};
+
+  my @releases = my @releases_orig = my %releases_hash = ();
+  while ($musicbrainz =~ m"<a href=[^>]*/release/[^>]*><bdi>([^<]+)"g) {
+    push (@releases_orig, decode_entities($1));
+  }
+
+  # count them
+  for my $release (@releases_orig) { $releases_hash{$release}++; }
+  # push first occurrence of each release into new array (with version count)
+  my $exceeded = 0;
+  for my $release (@releases_orig) {
+    next unless $releases_hash{$release};
+    my $extra = "";
+    if($releases_hash{$release} > 1) {
+      $extra = sprintf(" (%d versions)", $releases_hash{$release});
+    }
+    $releases_hash{$release} = 0;
+
+    if (scalar @releases >= $args{max}) {
+      $exceeded++;
+      next;
+    }
+    push(@releases, $release . $extra);
+  }
+
+  if ($last_title ne $title) {
+    $result .= $title;
+    $result .= " on " . pop(@releases) if scalar @releases == 1;
+    $result .= "\n";
+    $last_title = $title;
+  }
+
+  # print indented release list if there's more than one (or title repeated)
+  $result .= "  " . join("\n  ", @releases) . "\n" if scalar @releases > 0;
+  $result .= "  ($exceeded more releases exist)\n" if $exceeded;
+
+  $result .= "    $musicbrainz_uri\n" if $args{links};
+
+  return $result;
+
+}
+
+# treat -h as --help if it is the only argument
+do_help() and exit 0 if join(" ", @ARGV) eq "-h";
+
+# note, system() returns "false" when the command was successful
+if (system("sh", "-c", "type $fpcalc >/dev/null")) {
+  print STDERR "This program requires $fpcalc.\nMaybe try something like:  "
+             . "apt-get install libchromaprint-tools\n";
+  exit 2
+}
+
+
+# default arguments {
+
+$args{verbose} = 0;
+$args{max} = 50;
+$args{api} = "8XaBELgH"; # sample API key. Heavy users should get their own.
+$args{links} = 1;
+$args{hit_color} = $args{file_color} = $args{sep_color} = $args{no_color} = "";
+
+# pull --color out of $GREP_OPTIONS, also pull value into $1, except "never"
+$_ = $ENV{GREP_OPTIONS};
+$_ ||= $ENV{GREP_OPTS}; # from my workaround:  alias grep='grep $GREP_OPTS'
+$_ ||= "";
+# TODO: detect colors in $PS1 (look for '\e[')
+if (defined $ENV{GREP_COLOR} or /(?<!\S)--colou?r(?!=n)(?:=(\w+)\b)?/) {
+  # Getopt::Long doesn't properly support optional args, so use auto if empty
+  $args{color} = $1 || "auto";
+}
+
+# } end default arguments
+
+
+GetOptions(\%args, qw/ 1 2 3 4 5 6 7 8 9 api|a=s c C color|colour=s f F
+                       file_hide|hide-filename|h|no-filename
+                       file_show|show-filename|H|with-filename
+                       fingerprint|fprint|fp|id=s help
+                       length=i license links! links_off|no-links|L
+                       max|m|limit=i verbose|v+ version|V /)
+  or die "$usage\n";
+
+do_help() and exit if $args{help};
+do_version() and exit if $args{version};
+do_license() and exit if $args{license};
+
+$args{color} = "always" if $args{c};
+$args{color} = "never" if $args{C};
+
+if (defined $args{color} and $args{color} ne "never") {
+  # always color OR (output is open AND (specified color or auto))
+  if ($args{color} eq "always" or -t 1
+      and $args{color} =~ /^(?:(\d\d?\W\d\d?)|auto)$/) {
+    my $color_code = "";
+    if (defined $1 and $1) { $color_code = $1; $color_code =~ s/\W/;/; }
+    elsif (defined $ENV{GREP_COLOR}) { $color_code = $ENV{GREP_COLOR}; }
+    else { $color_code = "1;31"; }
+    $args{hit_color} = sprintf("\e[%sm", $color_code);
+    $args{file_color} = "\e[0;35m";
+    $args{sep_color} = "\e[0;32m";
+    $args{no_color} = "\e[0;0m";
+  } elsif (-t 1) {
+    die sprintf('Invalid color "%s" (try --color=auto)', $args{color});
+  }
+}
+
+die "Max hits cannot be under one" if defined($args{max}) and $args{max} < 1;
+
+$args{links} = 0 if $args{links_off};
+
+# we have lots of ways to specify the max hits. wrap them up.
+for (1..9) {
+  next unless $args{$_};
+  die "Multiple max hits arguments specified" if $args{max} != 50;
+  $args{max} = $_;
+}
+
+unless ($args{fingerprint}) {
+  $args{fingerprint} = "true" if $args{f};
+  $args{fingerprint} = "only" if $args{F};	# "only" will override "true"
+}
+
+die "Missing API key" if not $args{api} and $args{fingerprint} ne "only";
+
+my $length = "";
+$length = "-length " . $args{length} if $args{length};
+
+my $acoustid_uri = sprintf(
+  "https://api.acoustid.org/v2/lookup?client=%s&meta=recordingids",
+  $args{api});
+
+my $not_first = 0;
+
+# incorporate standard input if it was piped to us
+push(@ARGV, "/dev/stdin") unless -t 0;
+
+if (not @ARGV) {
+  print STDERR "$command: missing audio file(s)\n$usage";
+  exit 2;
+}
+
+FILE_PARSE: for my $file (@ARGV) {
+
+  print "\n" if $not_first;
+  $not_first = 1;
+
+  if ($args{file_show} or scalar @ARGV > 1 and not $args{file_hide}) {
+    printf "%s%s%s:%s\n",
+           $args{file_color}, $file, $args{sep_color}, $args{no_color};
+  }
+
+  my $sec = 0, my $fprint = "";
+  open(FINGERPRINT, sprintf('%s %s "%s" |', $fpcalc, $length, $file)) or die $!;
+  while(<FINGERPRINT>) {
+    my ($key, $value) = split("=", $_);
+    if ($key eq "DURATION") {
+      $sec = $value;
+      next;
+    }
+    if ($key eq "FINGERPRINT") {
+      $fprint = $value;
+      next;
+    }
+  }
+  close FINGERPRINT;
+  print STDERR "ERROR getting fingerprint for '$file'\n" if not $fprint;
+
+  if ($args{fingerprint}) {
+    print "$fprint\n";
+    next if $args{fingerprint} eq "only"
+      and not ($args{verbose} > 1 and $args{api});
+  }
+
+  sleep 0.34 if $not_first; # limit us to 3 queries/second (uses Time::HiRes)
+
+  my $acoustid_match = "$acoustid_uri&duration=$sec&fingerprint=$fprint";
+  print STDERR "Querying AcoustID servers via $acoustid_match\n"
+    if $args{verbose} > 2;
+
+  $acoustid_match = get($acoustid_match); # this should get us a JSON response
+  my $acoustid = decode_json($acoustid_match);
+  if ($acoustid->{status} ne "ok") {
+    printf STDERR qq'ERROR: Query failed with status "%s"\n',
+                  $acoustid->{status};
+    next;
+  }
+  unless ($acoustid->{results}) {
+    print STDERR "ERROR: No results section\n";
+    next;
+  }
+
+  my $hit_count = 0;
+  my %already_done = ();
+  my $report_json = ($args{verbose} > 2);
+
+  for (@{$acoustid->{results}}) {
+    next unless $_->{recordings};
+    my $score = 0;
+
+    if ($report_json) {
+      print "  $acoustid_match\n\n";
+      $report_json = 0;
+    }
+
+    if ($_->{score}) {
+        print "\n" if $hit_count;
+        $score = sprintf ("%.4f", $_->{score} * 100);
+        print "Match: $score%\n";
+    }
+
+    for (@{$_->{recordings}}) {
+      for my $id (keys %$_) {
+      	my $result = "";
+
+        next unless $id eq "id";
+        if ($already_done{$_->{id}}) {
+          #next unless $args{verbose};
+          $result = $already_done{$_->{id}};
+        } else {
+          #my $result = $_->{$id};
+          $result = parse_recording($_->{id}, $hit_count);
+          #if ($args{verbose}) {
+            $already_done{$_->{id}} = $result;
+            # if we did not mention the title because it was the same as above,
+            # put it back in for repeats
+            if ($result !~ /\A\S/m) {
+              $already_done{$_->{id}} = "$last_title\n$result";
+            }
+            $already_done{$_->{id}} =~
+              s/^(?!\(\Q$args{hit_color}query\E)(\S.*)/$1 (also matched at $score%)/;
+          #}
+        }
+
+        next unless $result;
+
+        print $result;
+
+        $hit_count++;
+        #next FILE_PARSE if $hit_count >= $args{max};
+
+      }
+    }
+  }
+
+} # end FILE_PARSE
+

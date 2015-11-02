@@ -1,0 +1,57 @@
+#!/usr/bin/perl
+#
+# Usage: convert2opus [OPTIONS] FILE [FILE...]
+#    OPTIONS are passed to opusenc
+#    FILE can be anything with metadata
+#    so long as a .wav of the same name also exists (e.g. foo.mp3 and foo.wav).
+
+use strict;
+use warnings;
+
+my @options = ();
+
+for my $file (@ARGV) {
+  if (-s $file) {
+
+    my @encode = ("opusenc", @options);
+
+    open (INFO, qq/mediainfo "$file" |/) or die $!;
+
+    while (<INFO>) {
+      next unless /^(\S[^:]*\S)\s+:\s+(\S.*)\s*$/;
+      my ($key, $value) = ($1, $2);
+
+      if    ($key eq "Album") {
+                push (@encode, "--album", $value);
+      } elsif ($key eq "Track name") {
+                push (@encode, "--title", $value);
+      } elsif ($key eq "Track name/Position") {
+                push (@encode, "--comment", "$key=$value");
+      } elsif ($key eq "Performer") {
+                push (@encode, "--artist", $value);
+      } elsif ($key eq "Genre") {
+                push (@encode, "--genre", $value);
+      } elsif ($key eq "Recorded date") {
+                push (@encode, "--date", $value);
+      }
+    }
+    close INFO;
+
+    my $wav = $file;
+    $wav =~ s/\.[^.]+$//;
+    for my $test ("", qw/wav aiff flac raw dts ac3 ogg/) {
+      if (-s "$wav.$test") { $file = "$wav.$test"; last; }
+    }
+
+    my $outfile = $file;
+    $outfile =~ s/\.(?:wav|aiff|flac|ogg|raw)$//i;
+    print "\n" . "-"x60 . "\nWriting:  $outfile.opus\n";
+    system(@encode, $file, "$outfile.opus");
+
+  } else {
+
+    push (@options, $file);
+
+  }
+
+}
