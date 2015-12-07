@@ -60,6 +60,7 @@ while getopts hV-: arg; do
           (license)	license ;;
           (version)	version ;;
           (*)		die "Illegal option --$OPTARG ... Try --help" ;;
+        esac ;;
     (\?) die "Try --help" ;;
   esac
 done
