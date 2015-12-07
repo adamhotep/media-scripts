@@ -84,6 +84,10 @@ sub gather_presets {
 
   + extra-std: --verbose  --format mkv --markers  --encoder x264 --quality 20.0 --encopts "weightb=0:psy-rd=1|0.2:partitions=all:trellis=2:ref=6:bframes=5:b-adapt=2:direct=auto:subme=10:rc-lookahead=60:me=umh:merange=26:deblock=0,1"  --vfr --loose-anamorphic --modulus 8  --aencoder vorbis --aq 4.0 --mixdown 5point1 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
 
+  + extra-hevc: --verbose  --format mkv --markers  --encoder x265 --quality 19.0 --encoder-preset slower --encopts "psy-rd=0.30:ref=5:bframes=5:b-adapt=2:subme=3:rc-lookahead=40:subme=3:deblock=0,1"  --vfr --loose-anamorphic --modulus 8  --aencoder vorbis --aq 4.0 --mixdown 5point1 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+
+  + extra-hevc-sm: --verbose  --format mkv --markers  --encoder x265 --quality 22.2 --encoder-preset medium --encopts "psy-rd=0.30:ref=5:bframes=4:b-adapt=2:subme=3:rc-lookahead=30:subme=3:deblock=1,1"  --vfr --loose-anamorphic --modulus 16  --aencoder vorbis --aq 0.0 --mixdown dpl2 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+
   + nocrop: --crop 0:0:0:0
 
 >
