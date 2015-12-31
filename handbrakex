@@ -9,26 +9,60 @@ use warnings;
 # HandBrakeCLI itself can't deal with combined single-dash arguments.
 
 my $name = 'handbrakex';
-my $ver = $name.' 0.2+20140127 by Adam Katz <www.khopis.com/scripts>, GPLv2+';
+my $ver = $name.' 0.3+20151230 by Adam Katz, licensed under the GNU GPL v2+';
+my $HANDBRAKE = "HandBrakeCLI";
 
 sub do_help {
   print <<end_help;
 A wrapper around HandBrakeCLI with advanced preset handling.
 Usage: $name [options] -o <file>
-  -h, --help             Display this help
-  --handbrake <file>     The location of the HandBrakeCLI binary
-  --log <file>           An output file to send logs of the encode progress
-  --no-color             Prevent coloring output (default: auto)
-  --noop                 Do nothing, just spit out the final command
-  --preset-names         Output all preset names
-  --real-help            Get help for any HandBrakeCLI option
-  --real-version         Get the version of HandBrakeCLI
-  -V, --version          Display the version of $name (this wrapper)
+  -h, --help           Display this help
+  --handbrake <file>   The location of the HandBrakeCLI binary
+  --log <file>         An output file to send logs of the encode progress
+  --no-color           Prevent coloring output (default: auto)
+  --noop               Do nothing, just spit out the final command
+  --option-example     A detailed example of presets and option collisions
+  --preset-names       Output all preset names (more concise than --preset-list)
+  --real-help          Get help for any HandBrakeCLI option
+  --real-version       Get the version of HandBrakeCLI
+  -V, --version        Display the version of $name (this wrapper)
 
   (All other options can be referenced via --real-help)
 
+Multiple presets may be used. Repeated options override previous options,
+including within --encopts/-x strings.  See --option-example for more detail.
+
 $ver
+Learn more at https://github.com/adamhotep/media-scripts
 end_help
+}
+
+sub do_option_example {
+  print <<end_option_example;
+$name can handle multiple presets as well as multiple options.
+Multiple instances of --encopts/-x are folded together.  For example:
+
+  $name -Z nocrop -Z preset1 -Z preset2 --crop 8:8:0:0 -i DVD.iso -o movie.mkv
+
+Suppose that after preset mapping, that becomes:
+
+  $name --crop 0:0:0:0 --encoder x265 --encoder-preset slow --encopts \\
+    psy-rd=0.3:b-adapt=2:rc-lookahead=40:subme=3:deblock=0 \\
+    --encoder x265 --encoder-preset medium -x psy-rd=0.4:me=3:deblock=1 \\
+    --crop 8:8:0:0 -i DVD.iso -o movie.mkv
+
+Only the last of each option is used, including --encopts/-x, so this becomes:
+
+  $HANDBRAKE --encoder x265 --encoder-preset medium --crop 8:8:0:0 \\
+    --encopts psy-rd=0.4:b-adapt=2:rc-lookahead=40:subme=3:deblock=1:me=3 \\
+    -i DVD.iso -o movie.mkv
+
+WARNING:  Different encoders have different options, so you may have issues when
+combining presets.  For example, x265 won't like x264's deblock=0,1
+
+(Note: $HANDBRAKE is sent all redundant command line options since
+it will handle them properly; this wrapper only collates the --encopts string.)
+end_option_example
 }
 
 my $log = "";
@@ -47,7 +81,6 @@ sub record {
 
 # variables in ALL_CAPS are used as globals (subroutines use and modify them)
 
-my $HANDBRAKE = "HandBrakeCLI";
 my $LOCAL_PRESETS = sprintf("%s/.%s.presets", $ENV{HOME}, $name);
 
 my $all_presets = "";
@@ -78,15 +111,17 @@ sub gather_presets {
 
 < Extra
 
-  + 30to24:  --deinterlace slower --detelecine --vfr
+  + 30to24:  --deinterlace bob --detelecine --vfr
 
-  + extra-sm: --verbose  --format mkv --markers  --encoder x264 --quality 23.6 --encopts "weightb=0:psy-rd=1|0.2:partitions=all:trellis=2:ref=6:bframes=5:b-adapt=2:direct=auto:subme=10:rc-lookahead=60:me=umh:merange=26:deblock=1,2"  --vfr --loose-anamorphic --modulus 16 --denoise weak  --aencoder vorbis --aq 0.0 --mixdown dpl2 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+  + animation: --encoder x265 --quality 20.0 --encoder-preset medium --encopts "psy-rd=0.4:deblock=1"  --vfr --detelecine  --nlmeans light --nlmeans-tune animation
 
-  + extra-std: --verbose  --format mkv --markers  --encoder x264 --quality 20.0 --encopts "weightb=0:psy-rd=1|0.2:partitions=all:trellis=2:ref=6:bframes=5:b-adapt=2:direct=auto:subme=10:rc-lookahead=60:me=umh:merange=26:deblock=0,1"  --vfr --loose-anamorphic --modulus 8  --aencoder vorbis --aq 4.0 --mixdown 5point1 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+  + h264: --verbose  --format mkv --markers  --encoder x264 --quality 20.0 --encopts "weightb=0:psy-rd=1|0.2:partitions=all:trellis=2:ref=6:bframes=5:b-adapt=2:direct=auto:subme=10:rc-lookahead=60:me=umh:merange=26:deblock=0,1"  --vfr --loose-anamorphic --modulus 8  --aencoder vorbis --aq 4.0 --mixdown 5point1 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
 
-  + extra-hevc: --verbose  --format mkv --markers  --encoder x265 --quality 19.0 --encoder-preset slower --encopts "psy-rd=0.30:ref=5:bframes=5:b-adapt=2:subme=3:rc-lookahead=40:subme=3:deblock=0,1"  --vfr --loose-anamorphic --modulus 8  --aencoder vorbis --aq 4.0 --mixdown 5point1 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+  + h264-sm: --verbose  --format mkv --markers  --encoder x264 --quality 23.6 --encopts "weightb=0:psy-rd=1|0.2:partitions=all:trellis=2:ref=6:bframes=5:b-adapt=2:direct=auto:subme=10:rc-lookahead=60:me=umh:merange=26:deblock=1,2"  --vfr --loose-anamorphic --modulus 16 --denoise weak  --aencoder vorbis --aq 0.0 --mixdown dpl2 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
 
-  + extra-hevc-sm: --verbose  --format mkv --markers  --encoder x265 --quality 22.2 --encoder-preset medium --encopts "psy-rd=0.30:ref=5:bframes=4:b-adapt=2:subme=3:rc-lookahead=30:subme=3:deblock=1,1"  --vfr --loose-anamorphic --modulus 16  --aencoder vorbis --aq 0.0 --mixdown dpl2 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+  + hevc: --verbose  --format mkv --markers  --encoder x265 --quality 19.0 --encoder-preset medium --encopts "psy-rd=0.3:ref=5:bframes=5:b-adapt=2:me=3:rc-lookahead=40:subme=3:deblock=0"  --vfr --loose-anamorphic --modulus 8  --aencoder vorbis --aq 4.0 --mixdown 5point1 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
+
+  + hevc-sm: --verbose  --format mkv --markers  --encoder x265 --quality 22.0 --encoder-preset medium --encopts "psy-rd=0.3:ref=5:bframes=4:b-adapt=2:me=3:rc-lookahead=25:subme=2:deblock=1"  --vfr --loose-anamorphic --modulus 16  --aencoder vorbis --aq 0.0 --mixdown dpl2 --normalize-mix 1 --arate auto --drc 0.0  --subtitle 1,2,3,4,5,6,7,8,9,10 --native-language eng
 
   + nocrop: --crop 0:0:0:0
 
@@ -113,12 +148,12 @@ end_x_presets
   for (split("\n", $preset_list)) {
     chomp;
     next unless /^\s*\+\s+([^:]+):\s*([^#]+)$/;
-    my ($name, $def) = ($1, $2);
-    if ($presets{$name}) {
-      print STDERR "WARNING: multiple presets named $name, using last one.\n";
+    my ($preset, $def) = ($1, $2);
+    if ($presets{$preset}) {
+      print STDERR "WARNING: multiple presets named $preset, using last one.\n";
     }
-    $presets{$name} = $def;
-    push(@sorted_presets, $name);
+    $presets{$preset} = $def;
+    push(@sorted_presets, $preset);
   }
 
   # If direct output & colors are encouraged, color presests
@@ -150,25 +185,26 @@ my @new_args = ();
 sub next_elem {
   my $i = shift;
   $i++;
-  if ($i < int(@ARGV)) { return $ARGV[$i]; }
+  if ($i < scalar @ARGV) { return $ARGV[$i]; }
   else { return ""; }
 }
 
 
-for (my $a = 0; $a < int(@ARGV); $a++) {
-  $_ = $ARGV[$a];
+for (my $arg = 0; $arg < scalar @ARGV; $arg++) {
+  $_ = $ARGV[$arg];
   #if (not /^-(?!-?$)/) { last; }
 
   if (/^--real-help/i) { unshift(@new_args, "--help"); }
   elsif (/^--real-ver/i) { unshift(@new_args, "--version"); }
   elsif (/^(?:-h|--(?i)help)/) { do_help; exit 0; }
+  elsif (/^--option-ex/i) { do_option_example; exit 0; }
   elsif (/^(?:-V|--(?i)ver(?:$|s))/) { print "$ver\n"; exit 0; }
 
   elsif (/^--hand-?brake(?:=|$)(.*)/i) {
     $HANDBRAKE = $1;
     unless ($HANDBRAKE) {
-      $HANDBRAKE = next_elem $a;
-      $a++;
+      $HANDBRAKE = next_elem $arg;
+      $arg++;
     }
     die qq("$HANDBRAKE" is not executable) unless -x $HANDBRAKE;
     $all_presets = gather_presets;
@@ -178,19 +214,19 @@ for (my $a = 0; $a < int(@ARGV); $a++) {
     ($_, $input) = ($1, $2);
     if ($input) {
       push(@new_args, "--input", qq/"$input"/);
-    } elsif (next_elem $a) {
-      $input = next_elem $a;
+    } elsif (next_elem $arg) {
+      $input = next_elem $arg;
       push(@new_args, $_, qq/"$input"/);
-      $a++;
+      $arg++;
     }
   }
 
   elsif (/^--log[^=]*(?:=|$)(.*)/) {
     if ($1 =~ /./) { # allow --log=0
       $log = $1;
-    } elsif (next_elem $a and next_elem $a !~ /^-/) {
-      $log = next_elem $a;
-      $a++;
+    } elsif (next_elem $arg and next_elem $arg !~ /^-/) {
+      $log = next_elem $arg;
+      $arg++;
     } else {
       $log = "//default log location//";
     }
@@ -204,10 +240,10 @@ for (my $a = 0; $a < int(@ARGV); $a++) {
     ($_, $output) = ($1, $2);
     if ($output) {
       push(@new_args, "--output", qq/"$output"/);
-    } elsif (next_elem $a) {
-      $output = next_elem $a;
+    } elsif (next_elem $arg) {
+      $output = next_elem $arg;
       push(@new_args, $_, qq/"$output"/);
-      $a++;
+      $arg++;
     }
   }
 
@@ -217,8 +253,8 @@ for (my $a = 0; $a < int(@ARGV); $a++) {
   elsif (/^(?:-Z|(?i)--preset(?:=|$))(.*)/) {
     my $preset = $1;
     unless ($preset) {
-      $preset = next_elem $a;
-      $a++;
+      $preset = next_elem $arg;
+      $arg++;
     }
 
     unless ($presets{$preset}) {
@@ -235,9 +271,9 @@ for (my $a = 0; $a < int(@ARGV); $a++) {
 
   elsif (/^(?:-v|--verbos[^=]*=?)(\d*)$/) {
     $verbose = $1; # verbose may be 0 (to disable)
-    if ($verbose !~ /./ and next_elem $a =~ /^\d+$/) {
-      $verbose = next_elem $a;
-      $a++;
+    if ($verbose !~ /./ and next_elem $arg =~ /^\d+$/) {
+      $verbose = next_elem $arg;
+      $arg++;
     }
     push(@new_args, "--verbose", $verbose) if $verbose;
   }
@@ -246,6 +282,31 @@ for (my $a = 0; $a < int(@ARGV); $a++) {
     push(@new_args, qq/"$_" /);
   }
 
+}
+
+my %encopts = my %opt_num = my @args = ();
+for (my $arg = 0; $arg < scalar @new_args; $arg++) {
+  if ($new_args[$arg] =~ /"?-(?:-encopts|x)\b/) {
+    $arg++;
+    $new_args[$arg] =~ s/^"(.*)"\s*$/$1/; # strip quotes
+    # parse encopts: key1=value1:key2=value2 -> (key1)(value1), (key2)(value2)
+    while ($new_args[$arg] =~ /([^:=]+)=([^:]+)/g) { # allows '=' in values
+      # intentionally override previous keys so we can combine multiple presets
+      $encopts{$1} = $2; # key = value
+      $opt_num{$1} ||= scalar keys %encopts;
+    }
+  } else {
+    push(@args, $new_args[$arg]);
+  }
+}
+if (%encopts) {
+  my $encopt_string = "";
+  # sort by the first occurence of each encoder option
+  for my $key (sort { $opt_num{$a} <=> $opt_num{$b} } keys %opt_num) {
+    $encopt_string .= ":" if $encopt_string;
+    $encopt_string .= sprintf("%s=%s", $key, $encopts{$key});
+  }
+  push(@args, "--encopts", qq/"$encopt_string"/);
 }
 
 
@@ -290,7 +351,7 @@ if ($list_presets) {
   exit 0;
 }
 
-$HANDBRAKE .= " " . join(" ", @new_args) . "\n";
+$HANDBRAKE .= " " . join(" ", @args) . "\n";
 
 record "[`time`] $name will run: $HANDBRAKE";
 
