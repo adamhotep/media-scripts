@@ -4,6 +4,9 @@ Identify audio files by their [AcoustID](https://acoustid.org/) fingerprints (re
 # convert2opus
 Converts audio files to Opus.
 
+# framerate
+Reads or calculates and then displays the frames per second for each stream in given movie(s) (requires [FFmpeg](https://ffmpeg.org/))
+
 # handbrakex
 A command-line wrapper around [HandBrake](https://github.com/HandBrake/HandBrake) with advanced preset handling (requires HandBrakeCLI from handbrake-cli).
 
