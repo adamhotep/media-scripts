@@ -1,6 +1,9 @@
 # acoustid
 Identify audio files by their [AcoustID](https://acoustid.org/) fingerprints (requires fpcalc from libchromaprint-tools).
 
+# audacious-songchange
+Command triggers for audacious/beep/xmms2/xmms on changing songs (originally called xmms-songchange), ideal for stopping after the current song completes.
+
 # convert2opus
 Converts audio files to Opus.
 
