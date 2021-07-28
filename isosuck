@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION="1.0.20181101"
+version="1.1.0.20200223"
 
 help() { cat <</help
 Usage: isosuck [DVD Title] [DVD DEVICE]
@@ -9,14 +9,14 @@ DVD Title will default to the volume ID of the DVD
 Output will be <DVD Title>.iso
 DVD DEVICE will default to /dev/dvd
 
-isosuck $VERSION Copyright 2010+ by Adam Katz, GPLv2
+isosuck $version Copyright 2010+ by Adam Katz, GPLv2
 Learn more at https://github.com/adamhotep/media-scripts
 /help
   exit
 }
 
 version() { cat <</version
-isosuck $VERSION
+isosuck $version
 Copyright (C) 2010+  Adam Katz
 License GPLv2+: GNU GPL version 2 or later <https://gnu.org/licenses/gpl.html>.
 This is free software: you are free to change and redistribute it.
@@ -77,26 +77,26 @@ if ! we_have isoinfo; then
   exit 2
 fi
 
-TITLE="$1"
+title="$1"
 
-for DEVICE in "$2" "/dev/dvd" "/dev/sr0" "/dev/sr1" "/dev/sr2" "/dev/sr3"; do
-  if [ -b "$DEVICE" ]; then
+for device in "$2" "/dev/dvd" "/dev/sr0" "/dev/sr1" "/dev/sr2" "/dev/sr3"; do
+  if [ -b "$device" ]; then
     break
   fi
 done
 
-if [ ! -b "$DEVICE" ]; then
+if [ ! -b "$device" ]; then
   echo "ERROR: Could not find an appropriate DVD device." >&2
   exit 2
-elif [ -n "$2" ] && [ "$2" != "$DEVICE" ]; then
-  echo "WARNING: '$2' is not a block device, using '$DEVICE' instead." >&2
+elif [ -n "$2" ] && [ "$2" != "$device" ]; then
+  echo "WARNING: '$2' is not a block device, using '$device' instead." >&2
   sleep 1
 fi
 
-dvdinfo() { isoinfo -d -i "$DEVICE" 2>/dev/null; }
+dvdinfo() { isoinfo -d -i "$device" 2>/dev/null; }
 
 if we_have dc3dd; then
-  image() { dc3dd hash=md5 if="$DEVICE" of="$1"; }
+  image() { dc3dd hash=md5 if="$device" of="$1"; }
 else
   if we_have md5sum; then # GNU
     hash() { md5sum "$1" |awk '{print $1}'; }
@@ -108,80 +108,84 @@ else
     hash() { /bin/ls -l "$1" |awk '{print $5}'; }
   fi
   image() {
-    local RETVAL orig new
-    dd if="$DEVICE" of="$1"
-    RETVAL=$?
-    if [ $RETVAL != 0 ]; then
-      echo "WARNING: dd did not exit cleanly (code $RETVAL)" >&2
+    local retval orig new
+    dd if="$device" of="$1"
+    retval=$?
+    if [ $retval != 0 ]; then
+      echo "WARNING: dd did not exit cleanly (code $retval)" >&2
       echo "         (performing hash check anyway, may be a waste of time)" >&2
     fi
-    orig=`hash "$DEVICE"`
-    new=`hash "$1"`
+    orig="$(hash "$device")"
+    new="$(hash "$1")"
     if [ "$orig" != "$new" ]; then
       echo "FAILURE: Hash mismatch on output '$1'" >&2
       return 1
     else
       echo "Success: Hash matches original source."
     fi
-    return $RETVAL
+    return $retval
   }
 fi
 
-DEFAULT_TITLE=DVD_VIDEO
+default_title=DVD_VIDEO
 
-if [ -z "$TITLE" ]; then
-  TITLE=`dvdinfo |sed '/^Volume id: /!d; s///'`
+if [ -z "$title" ]; then
+  title="$(dvdinfo |sed '/^Volume id: /!d; s///')"
 fi
-if [ -z "$TITLE" ]; then
-  TITLE=DVD_VIDEO
+if [ -z "$title" ]; then
+  title=DVD_VIDEO
 fi
-if [ "$TITLE" = "$DEFAULT_TITLE" ]; then
+if [ "$title" = "$default_title" ]; then
   i=1
-  while [ -s "$TITLE.iso" ]; do
-    TITLE="$BASE-$i"
+  while [ -s "$title.iso" ]; do
+    title="$BASE-$i"
     i=$((i+1))
   done
 fi
 
-if [ -s "$TITLE.iso" ]; then
-  echo "Output '$TITLE.iso' already exists, aborting." >&2
+if [ -s "$title.iso" ]; then
+  echo "Output '$title.iso' already exists, aborting." >&2
   exit 1
 fi
 
-# BSD readlink doesn't support GNU readlink's -f/--canonicalize
-if ! readlink --help 2>&1 |grep -l .--canonicalize >/dev/null; then
+# not posix but present nearly everwhere (GNU coreutils, BSD). Fallback:
+if ! we_have readlink; then
+  # Usage: readlink [-f] LINK
+  # Print the target of given LINK, keep following given -f, limit=100 (~0.33s)
   readlink() {
-    if [ "$1" = "--canonicalize" ]; then
-      shift
-    fi
-    if [ ! -h "$1" ]; then
-      echo "$1"
-      return
-    fi
-    #next=`ls -l "$1" |sed 's/.* -> //'`
-    next=`builtin readlink "$1"`
-    readlink "$next"
+    local canonicalize= file="$1" target= i=0
+    case "$1" in ( -f | --canonicalize ) canonicalize=1 file="$2" ;; esac
+    if [ -n "${file##/*}" ]; then file="$PWD/$file"; fi
+    while [ -L "$file" ] && [ $i -le 100 ]; do
+      target="$(ls -dl "$file")" || break
+      target="${target#* $file -> }"
+      if [ -n "${target##/*}" ]; then target="${file%/*}/$target"; fi
+      if [ -e "$target" ]; then file="$target"; else break; fi
+      if [ -z "$canonicalize" ]; then break; fi
+      i=$((i+1))
+    done
+    echo "$file"
   }
 fi
 
-TRUE_DEVICE=`readlink --canonicalize "$DEVICE" 2>/dev/null || echo "$DEVICE"`
-MOUNTED=`mount |awk -v dvd="$TRUE_DEVICE" '$1 == dvd'`
-MOUNTED="${MOUNTED#* on /}"
-MOUNTED="${MOUNTED%% *}"
-OLDTITLE="${MOUNTED##*/}"
-if [ -n "$MOUNTED" ] && [ "$MOUNTED" = "${MOUNTED%*/$TITLE}" ]; then
-  MOUNTED="/$MOUNTED"
-  echo "WARNING: You appear to have a different DVD ($OLDTITLE) mounted."
+true_device="$(readlink -f "$device" 2>/dev/null || echo "$device")"
+mounted="$(mount |awk -v dvd="$true_device" '$1 == dvd')"
+mounted="${mounted#* on /}"
+mounted="${mounted% type *}"
+oldtitle="${mounted##*/}"
+if [ -n "$mounted" ] && [ "$mounted" = "${mounted%*/$title}" ]; then
+  mounted="/$mounted"
+  echo "WARNING: You appear to have a different DVD ($oldtitle) mounted."
   echo "         This could result in the output being truncated."
-  echo "         I'll UNMOUNT '$MOUNTED' in five seconds.  You've been warned."
+  echo "         I'll UNMOUNT '$mounted' in five seconds.  You've been warned."
   sleep 5
-  umount "$MOUNTED"
+  umount "$mounted" || sudo umount -v "$mounted"
 fi
 
-LOCATION=`dirname "$TITLE.iso"`
-FREE=`df -k "$LOCATION" |awk 'NR==2 && $4 { print $4 }'`
+location="$(dirname "$title.iso")"
+free="$(df -k "$location" |awk 'NR==2 && $4 { print $4 }')"
 
-SIZE=`dvdinfo |awk '
+size="$(dvdinfo |awk '
   /^Logical block size is:/ { block = $NF }
   /^Volume size is:/ { vol = $NF }
   END {
@@ -189,19 +193,18 @@ SIZE=`dvdinfo |awk '
     min = 4 * 1024^2   # a minimum size in case isoinfo fails
     printf "%.0f", (size > min ? size : min)
   }
-'`
+')"
 
-echo "$TITLE^$SIZE^$DEVICE" |awk -F ^ '{
-  printf "Will write `%s.iso` (%.2fG) from `%s`",
-         $1, $(NF-1) / 1024 / 1024, $NF
+awk -v title="$title" -v size="$size" -v device="$device" 'BEGIN {
+  printf "Will write `%s.iso` (%.2fG) from `%s`", title, size / 1024^2, device
 }'
 sleep 2
 
 # warn if we'd have less than 1GB free after ripping
-if [ $SIZE -ge $((FREE-1024*1024)) ]; then
-  echo |awk -v SIZE="$SIZE" -v FREE="$FREE" '{
+if [ $size -ge $((free-1024*1024)) ]; then
+  awk -v size="$size" -v free="$free" 'BEGIN {
     printf "WARNING: Disk image is %.2fG but we only have %.2fG free space\n",
-      SIZE / 1024^2, FREE / 1024^2
+      size / 1024^2, free / 1024^2
   }' >&2
   echo "... waiting 20 seconds for you to cancel"
   sleep 20
@@ -209,21 +212,21 @@ if [ $SIZE -ge $((FREE-1024*1024)) ]; then
 fi
 
 if [ "${TERM:-no_term}" = "${TERM#[Ll]inux}" ]; then
-  printf "\033]0;${0##*/}: $TITLE\a"
+  printf "\033]0;${0##*/}: $title\a"
 fi
 
-image "$TITLE.iso"
-RETVAL=$?
+image "$title.iso"
+retval=$?
 
-ACTUAL_SIZE=`du -k "$TITLE.iso" |awk '{print $1}'`
+actual_size="$(du -k "$title.iso" |awk '{print $1}')"
 
 # if actual size is 5+ MB smaller than expected size
-if [ "$ACTUAL_SIZE" -lt "$((SIZE-5*1024))" ]; then
-  echo "$ACTUAL_SIZE $SIZE" |awk '{
+if [ "$actual_size" -lt "$((size-5*1024))" ]; then
+  echo "$actual_size $size" |awk '{
     printf "WARNING: final size (%.2fG) is %.1fM smaller than expected (%.2fG)",
       $1 / 1024 / 1024, ($2 - $1) / 1024, $2 / 1024 / 1024;
   }' >&2
   exit 2
 fi
 
-exit $RETVAL
+exit $retval
