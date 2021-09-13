@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version="1.1.0.20200223"
+version="1.1.0.20210912"
 
 help() { cat <</help
 Usage: isosuck [DVD Title] [DVD DEVICE]
@@ -66,18 +66,13 @@ while getopts hLV-: OPT; do
 done
 shift $((OPTIND-1))
 
-if [ "$1" != "${1#-}" ]; then
-  help
-  if [ "$1" = -h -o "$1" = --help ]; then exit 0; fi
-  exit 2
-fi
-
 if ! we_have isoinfo; then
   echo "This program requires isoinfo; try installing genisoimage or cdrkit" >&2
   exit 2
 fi
 
-title="$1"
+# Get title from command line argument, strip trailing `.iso` (we add it later)
+title="${1%.iso}"
 
 for device in "$2" "/dev/dvd" "/dev/sr0" "/dev/sr1" "/dev/sr2" "/dev/sr3"; do
   if [ -b "$device" ]; then
