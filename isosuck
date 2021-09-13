@@ -128,12 +128,13 @@ if [ -z "$title" ]; then
   title="$(dvdinfo |sed '/^Volume id: /!d; s///')"
 fi
 if [ -z "$title" ]; then
-  title=DVD_VIDEO
+  title="DVD_VIDEO"
 fi
 if [ "$title" = "$default_title" ]; then
   i=1
+  base="$default_title"
   while [ -s "$title.iso" ]; do
-    title="$BASE-$i"
+    title="$base-$i"
     i=$((i+1))
   done
 fi
