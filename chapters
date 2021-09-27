@@ -1,0 +1,113 @@
+#!/bin/sh
+help() { cat <</help
+Show chapter information for given media
+Usage: chapters [OPTIONS] [FILE...]
+  -a, --all        Display each file's chapters (default if given one file)
+  -v, --verbose    Show chapters to the millisecond, show files lacking chapters
+
+Now also displaying the number of video, audio, and text tracks.
+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+chapters v0.5.20210926 copyright 2010+ by Adam Katz, GPL
+/help
+exit
+}
+
+all=0
+verbose=0
+precision='2.0'
+while getopts ahv-: OPT; do
+  case $OPT$OPTARG in
+    ( a | -all* )	all=1 ;;
+    ( h | -help* )	help ;;
+    ( v | -verb* )	verbose=1 precision='6.3' ;;
+    ( -* )		echo "Illegal option --$OPTARG" >&2; exit 2 ;;
+    ( * )		exit 2 ;;
+  esac
+done
+shift $((OPTIND-1))
+
+if ! command -v mediainfo >/dev/null 2>&1; then
+  echo 'ERROR: command `mediainfo` is required for this program.' >&2
+  exit 2
+fi
+
+# Default to all (non-hidden) files in current directory if not given arguments
+if [ $# = 0 ]; then
+  set -- *
+fi
+
+CHAPTER_RE='/^ *[0-9][0-9]*:.*Chapter /'
+awk_function_time='
+  function time(t) {
+    m = int(t/60)
+    s = t - 60 * m
+    if (m > 60) {
+      h = int(m/60)
+      m -= h * 60
+      return sprintf ("%2d:%02d:%0'"$precision"'f", h, m, s)
+    } else {
+      return sprintf ("%5d:%0'"$precision"'f", m, s)
+    }
+  }
+'
+awk_set_duration='
+  # the first "Duration" should be the overall duration
+  $1 == "Duration" && !duration && NF==2 && $2 !~ /[^.0-9]/ {
+    duration = $2 / 1000	# ms -> s
+  }
+'
+
+if [ "$all" = 1 ] || [ $# = 1 ]; then
+  for file in "$@"; do
+    if [ $# -gt 1 ]; then
+      echo "$break$file:"
+      break="\n"
+    fi
+    mediainfo -f "$file" 2>/dev/null |awk -F ' *: *' -v file="$file" "
+      $awk_function_time
+      $awk_set_duration
+
+      $CHAPTER_RE"' {
+        chap = $1 * 3600 + $2 * 60 + $3
+        if (name) print time(chap - last) "  " name
+        name = $0
+        sub('"$CHAPTER_RE"', "Chapter ", name)
+        last = chap
+      }
+
+      END {
+        if (name) {
+          print time (duration - last) "  " name
+          print time (duration) "  (Total)"
+        }
+        else {
+          print time (duration) "  " file
+          exit 1
+        }
+      }'
+    RETVAL=$?
+    if [ $RETVAL != 0 ]; then
+      EXIT=$RETVAL
+    fi
+  done
+  exit $EXIT
+fi
+
+echo ' Ch  V  A  T     Time  Filename'
+for f in "$@"; do
+  mediainfo -f "$f" 2>/dev/null |awk -F ' *: *' -v file="$f" "
+    $awk_function_time
+    $awk_set_duration
+    $CHAPTER_RE"' { chapter++ }
+
+    NF == 1 && /^Video/ { video++ }
+    NF == 1 && /^Audio/ { audio++ }
+    NF == 1 && /^Text/  { text++ }
+    END {
+      if (chapter || video || audio || text || '"$verbose"')
+        printf "% 3d% 3d% 3d% 3d %8s  %s\n",
+          chapter, video, audio, text, time(duration), file
+    }
+  '
+done
