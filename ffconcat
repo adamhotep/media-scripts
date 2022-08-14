@@ -1,0 +1,131 @@
+#!/bin/sh
+help() { cat <</help
+Concatenate given movies with ffmpeg, with chapters marking their original parts
+Usage: ffconcat [OPTIONS] MOVIE1 MOVIE2... OUTPUT
+  -n NAME, --name=NAME  Use NAME rather than the metadata title or filename.
+                        You can use this multiple times to name each chapter.
+                        The last one will be used for all remaining chapters.
+
+NAME may contain a few variables (sorry, no escape character is supported):
+  %CHAPTER%  The chapter number
+  %FILE%     The input file name (without path or extension)
+  %MINUTES%  The chapter play time in minutes
+  %SECONDS%  The chapter play time in seconds (total, not remaining)
+  %TITLE%    The input file title (if title is missing/blank, this is %FILE%)
+
+This uses the ffmpeg concat demuxer to concatenate movies without reencoding.
+Each movie must have the same streams (codecs, dimensions, time base, etc).
+See more at https://ffmpeg.org/ffmpeg-formats.html#concat
+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+ffconcat v0.3.20220813 copyright 2022+ by Adam Katz, GPLv2+
+/help
+}
+
+usage() { help |grep -m1 ^Usage; }
+
+# Information Separator 4 (non-printing ASCII code dec 28, oct \034, hex \x1c)
+# is our field separator (AWK FS="field separator", ASCII FS="File Separator")
+FS='\034'
+
+die() { echo "$*" >&2; exit 2; }  # complain to STDERR and exit with error
+needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
+
+name=''
+while getopts hn:v-: OPT; do
+  if [ "$OPT" = - ]; then # --option https://stackoverflow.com/a/28466267/519360
+    OPT="${OPTARG%%=*}" OPTARG="${OPTARG#$OPT}" OPTARG="${OPTARG#=}"
+  fi
+  case "$OPT" in
+    ( h | help )	help; exit ;;
+    # truncate at FS to prevent shenanigans. it's not printable anyway.
+    ( n | name )	needs_arg; name="$name${name:+$FS}${OPTARG%%$FS*}" ;;
+    ( usage )		usage; exit ;;
+    ( v | version )	help |tail -n1; exit ;;
+    ( ??* )		die "Illegal option --$OPT" ;;  # bad long option
+    ( ? )		exit 2 ;;  # bad short option (error handled by getopts)
+  esac
+done
+shift $((OPTIND-1))
+
+# `command -v` only reliably handles one command. `type` implements AND.
+if ! type ffmpeg ffprobe >/dev/null 2>&1; then
+  die 'This script depends on ffmpeg and ffprobe. Please install ffmpeg.'
+fi
+
+if [ $# -lt 3 ]; then
+  usage
+  die "Try \`${0##*/} --help\` for more information."
+fi
+
+tmp="$(mktemp -d)"
+trap "rm -rf $tmp" 0 1 2 5 9 11 15 18
+
+output="$(eval echo '$'$#)"	# this is the final argument
+i=1
+
+for file in "$@"; do
+  if [ "$file" = "$output" ]; then break; fi	# the output is not also input
+
+  if [ ! -r "$file" ]; then
+    die "Cannot read '$file'"
+  fi
+  if [ ! -s "$file" ]; then
+    die "Empty file: '$file'"
+  fi
+
+  movie="$tmp/$i.${file##*.}"	# preserve the extension but not the name
+  # escaping logic for single quotes is odd, so just symlink the files instead
+  ln -s "$PWD/$file" "$movie"
+  echo "file '$movie'" >> "$tmp/list.txt"
+  # show duration and (if present) tag title
+  # then remove FS then convert newlines to RSes so this is one line long
+  ffprobe -v error -show_entries format=duration \
+                   -show_entries format_tags=title \
+                   -of default=noprint_wrappers=1 \
+                   "$movie" \
+    |tr -d "$FS" |tr '\n' "$FS"
+  # final (2nd or 3rd) item: filename without path or extension
+  movie="${file##*/}"			# no path
+  echo "FILE:title=${movie%.*}" 	# metadata label, no extension
+  i=$((i+1))
+done |awk -v FS="$FS" -v rate=1000000 -v name_str="$name" '
+  BEGIN {
+    print ";FFMETADATA1"
+    if (name_str) { names_len = split(name_str, names, FS) } # make names array
+  }
+  NF {
+    title = ""
+    # ffprobe outputs in *stored* order. unreliable, but filename is always last
+    for (f=1; f<=NF; f++) {
+      if ($f ~ /^duration=/) { duration = substr($f, 10); continue }
+      # if prospective title has a char that is not a dquote, quote, or space
+      if (title == "" && $f ~ /^[^=]*title=.*[^"\047[:space:]]/) {
+        title = $f
+        sub(/^[^=]*=/, "", title)
+      }
+      if ($f ~ /^FILE:title=./) { filename = substr($f, 13) }
+    }
+    if (names_len) {
+      if (NR >= names_len) { newtitle = names[names_len] }
+      else { newtitle = names[NR] }
+      gsub("%CHAPTER%", NR, newtitle)
+      gsub("%FILE%", filename, newtitle)
+      gsub("%MINUTES%", sprintf("%.0f", duration/60), newtitle)
+      gsub("%SECONDS%", sprintf("%.0f", duration), newtitle)
+      gsub("%TITLE%", title, newtitle)
+      title = newtitle
+    }
+    else if (title == "") { title = "Chapter " NR }	# simple fail over
+    # make colliding chapter names more informative by appending the chapter #
+    else if (title_seen[title]++) { title = title "(" title_seen[title] ")" }
+
+    printf "[CHAPTER]\nTIMEBASE=1/%d\nSTART=%.0f\n", rate, total
+    total += duration * rate
+    printf "END=%.0f\n", total - 1
+    printf "title=%s\n\n", title
+  }
+' > "$tmp/metadata"
+
+ffmpeg -f concat -safe 0 -i "$tmp/list.txt" -i "$tmp/metadata" \
+      -map 0 -map_metadata 1 -map_chapters 1 -c copy "$output"
