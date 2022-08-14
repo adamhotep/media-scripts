@@ -8,7 +8,7 @@ Usage: chapters [OPTIONS] [FILE...]
 Now also displaying the number of video, audio, and text tracks.
 
 A part of media-scripts, https://github.com/adamhotep/media-scripts
-chapters v0.5.20210926 copyright 2010+ by Adam Katz, GPL
+chapters v0.6.20220814 copyright 2010+ by Adam Katz, GPLv2+
 /help
 exit
 }
@@ -37,7 +37,8 @@ if [ $# = 0 ]; then
   set -- *
 fi
 
-CHAPTER_RE='/^ *[0-9][0-9]*:.*Chapter /'
+#CHAPTER_RE='/^ *[0-9][0-9]*:.*Chapter /'
+CHAPTER_RE='/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9]+[[:space:]]+:/'
 awk_function_time='
   function time(t) {
     m = int(t/60)
@@ -70,10 +71,13 @@ if [ "$all" = 1 ] || [ $# = 1 ]; then
 
       $CHAPTER_RE"' {
         chap = $1 * 3600 + $2 * 60 + $3
-        if (name) print time(chap - last) "  " name
-        name = $0
-        sub('"$CHAPTER_RE"', "Chapter ", name)
-        last = chap
+        # Some movies have their chapters listed twice. Do not double count.
+        if (chap == 0 && last == 0 || chap > last) {
+          if (name) print time(chap - last) "  " name
+          name = $0
+          sub('"$CHAPTER_RE"', "Chapter ", name)
+          last = chap
+        }
       }
 
       END {
@@ -99,7 +103,13 @@ for f in "$@"; do
   mediainfo -f "$f" 2>/dev/null |awk -F ' *: *' -v file="$f" "
     $awk_function_time
     $awk_set_duration
-    $CHAPTER_RE"' { chapter++ }
+    $CHAPTER_RE"' {
+      chap = $1 * 3600 + $2 * 60 + $3
+      if (chap == 0 && last == 0 || chap > last) {
+        chapter++
+        last = chap
+      }
+    }
 
     NF == 1 && /^Video/ { video++ }
     NF == 1 && /^Audio/ { audio++ }
