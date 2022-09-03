@@ -25,7 +25,7 @@ for (split(":", $ENV{PATH})) {
 }
 
 my $name =	"acoustid-lookup";
-my $version =	"1.0+20151101";
+my $version =	"1.1.20211007";
 my $one_liner = "Identify audio files by their AcoustID fingerprints.";
 my $usage =	"Usage: $command [OPTIONS] FILE [FILE...]";
 
@@ -34,7 +34,7 @@ sub do_help {
 $one_liner
 $usage
   -NUM    Stop after NUM matches (NUM must be 1-9)
-  -a KEY  API key (please obtain your own key if you have a high volume)
+  -a KEY  API key (like "8XaBELgH")
   -c      Force colors (default is auto, taken from \$GREP_OPTIONS)
   -C      Disable colors (default is auto, taken from \$GREP_OPTIONS)
   -f      Show fingerprint (these are long, off by default)
@@ -286,7 +286,10 @@ FILE_PARSE: for my $file (@ARGV) {
   print STDERR "Querying AcoustID servers via $acoustid_match\n"
     if $args{verbose} > 2;
 
-  $acoustid_match = get($acoustid_match); # this should get us a JSON response
+  # this should get us a JSON response
+  $acoustid_match = get($acoustid_match)
+    or die "Invalid API key? Offline? Fetch failed$!";
+  print "$acoustid_match\n";
   my $acoustid = decode_json($acoustid_match);
   if ($acoustid->{status} ne "ok") {
     printf STDERR qq'ERROR: Query failed with status "%s"\n',
