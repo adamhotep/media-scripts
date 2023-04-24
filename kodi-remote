@@ -184,7 +184,7 @@ case "$1" in
 
   # Aliases for common commands
   ( aplay | aplaypause | apause )	kodi_play 0 ;;
-  ( clean  | clean*vid* | clean*mov* )	kodi_cmd VideoLibrary.Clean ;;
+  ( clean | clean*vid* | clean*mov* )	kodi_cmd VideoLibrary.Clean ;;
   ( clean-audio* | clean*music* )	kodi_cmd AudioLibrary.Clean ;;
   ( info )				kodi_info ;;
   ( mute | unmute )			kodi_cmd Application.SetMute ;;
