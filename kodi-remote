@@ -22,7 +22,8 @@ This requires you to have enabled the web server
   Settings -> Services -> Control -> Allow remote control via HTTP
 Docs for JSON, methods, and parameters: $api_link
 
-kodi-remote 0.2.20230423.0 copyright 2021+ by @adamhotep, GPL v2+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+kodi-remote 0.2.20230423.1 copyright 2021+ by Adam Katz, GPLv2+
 /help
   exit
 }
