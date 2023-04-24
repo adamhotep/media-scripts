@@ -1,0 +1,168 @@
+#!/bin/sh
+help() { cat <</help
+Usage: kodi-command [OPTIONS] COMMAND|JSON
+   or: kodi-command [OPTIONS] METHOD [PARAM]
+
+Options:
+  -c FILE  Configuration file (default: \`$api_creds\`)
+           For further info, run \`${0##*/} --config-help\`
+  -q       Make output quieter, -qq also suppresses response JSON
+  -u URL   The kodi control URL (default: \`url\` value from config file)
+
+Command aliases:
+  clean, clean-audio    Clean library: VideoLibrary.Clean or AudioLibrary.Clean
+  info                  Get info on the video or audio being played
+  mute                  Toggle mute: Application.SetMute
+  play, pause           Toggle between play and pause (video)
+  quit                  Exit kodi
+  update, update-audio  Update library: VideoLibrary.Scan or AudioLibrary.Scan
+
+This requires you to have enabled the web server
+  Settings -> Services -> Control -> Allow remote control via HTTP
+Learn more methods and parameters at $api_link
+
+kodi-remote 0.1.20220902.0 copyright 2021+ by @adamhotep, GPL v2+
+/help
+  exit
+}
+
+api_file_help() { cat <</api_help
+\`$api_creds\` is a curl config file,
+called with \`curl --config FILE\` (see \`man curl\`).
+
+It should look like this (with no indentation, ideally with a better password):
+
+    url = "http://localhost:8080/jsonrpc"
+    user = "kodi_user:kodi_webapi_PA55w0rd"
+
+I highly recommend file mode 600 (-rw-------) or 400 (-r--------)
+/api_help
+  exit $1
+}
+
+# constants
+api_link="https://kodi.wiki/view/JSON-RPC_API/v12"
+qq='"'
+
+# defaults
+api_creds="$HOME/.kodi/.api_creds"
+url=
+quiet=0
+
+# load options
+needs_arg() {
+  if [ -z "$OPTARG" ]; then
+    echo "No arg for --$OPT option" >&2
+    exit 2
+  fi
+}
+while getopts c:hqu:v-: OPT; do
+  if [ "$OPT" = - ]; then # long opt https://stackoverflow.com/a/28466267/519360
+    OPT="${OPTARG%%=*}" OPTARG="${OPTARG#$OPT}" OPTARG="${OPTARG#=}"
+  fi
+  case $OPT in
+    ( c* )  if [ -z "$OPTARG" ]; then api_file_help; fi; api_creds="$OPTARG" ;;
+    ( h* )  help ;;
+    ( q* )  quiet=$(( quiet + 1 )) ;;
+    ( u* )  needs_arg; url="$OPTARG" ;;
+    ( v* )  quiet=$(( quiet - 1 )) ;;
+  esac
+done
+shift $((OPTIND-1))
+
+if ! [ -s "$api_creds" ] || ! [ -r "$api_creds" ]; then
+  echo "You don't have a nonzero-sized readable '$api_creds' file." >&2
+  api_file_help 2
+fi
+
+kodi_json_cmd() {
+  case $quiet in
+    ( 0 | -* ) silent='' ;;
+    ( 1 ) silent='--silent' ;;
+    ( * ) silent='--silent --output /dev/null' ;;
+  esac
+  curl --config "$api_creds" $silent --request POST \
+    --header "content-type:application/json" --data "$*" ${url:+"$url"}
+}
+
+kodi_cmd() {
+  method="$1" params=
+  shift
+  case "$*" in
+    ( \{*\} )	params='"params":'"$*" ;;
+    ( * )
+      params='"params":{'
+      key=1
+      comma=
+      for p in "$@"; do
+        if [ $key = 1 ]; then
+          params="$params$comma$qq$p$qq:"
+          comma=','
+          key=0
+        elif [ "$p" = "${p#*[^0-9]}" ] || [ "$p" != "${p#\[}" ]; then
+          # pure numeric value or a JSON nested structure, take as-is (no quotes)
+          params="$params$p"
+          key=1
+        else
+          params="$params$qq$p$qq"
+          key=1
+        fi
+      done
+      params="$params},"
+      ;;
+  esac
+  kodi_json_cmd "$(printf \
+    '{ "jsonrpc": "2.0", "method": "%s", %s "id": "kodi-command[%d]" }' \
+    "$method" "$params" "$$"
+  )"
+}
+
+kodi_info() {
+  local player="$(kodi_cmd Player.GetActivePlayers)"
+  case $player in
+    ( *'"type":"video"'* ) kodi_json_cmd '{
+        "jsonrpc": "2.0",
+        "method": "Player.GetItem",
+        "params": {
+          "properties": [
+            "title", "album", "artist", "season", "episode", "duration",
+            "showtitle", "tvshowid", "file"
+          ],
+          "playerid": 1
+        },
+      "id": "VideoGetItem"
+    }' ;;
+    ( *'"type":"audio"'* ) kodi_json_cmd '{
+        "jsonrpc": "2.0",
+        "method": "Player.GetItem",
+        "params": {
+          "properties": [ "title", "album", "artist", "duration", "file" ],
+          "playerid": 0
+        },
+        "id": "AudioGetItem"
+      }' ;;
+  esac
+}
+
+case "$1" in
+  ( help )				help ;;
+
+  # Aliases for common commands
+  ( aplay | aplaypause | apause )	kodi_cmd Player.PlayPause playerid 0 ;;
+  ( clean  | clean*vid* | clean*mov* )	kodi_cmd VideoLibrary.Clean ;;
+  ( clean-audio* | clean*music* )	kodi_cmd AudioLibrary.Clean ;;
+  ( info )				kodi_info ;;
+  ( mute | unmute )			kodi_cmd Application.SetMute ;;
+  ( play* | pause | vplay* | vpause )	kodi_cmd Player.PlayPause playerid 1 ;;
+  ( quit | exit )			kodi_cmd Application.Quit ;;
+  ( update | upd*vid* | upd*mov* )	kodi_cmd VideoLibrary.Scan ;;
+  ( update-audio* | update*music* )	kodi_cmd AudioLibrary.Scan ;;
+
+  ( \{* )	kodi_json_cmd "$*" ;;
+  ( *.* )	kodi_cmd "$@" ;;
+  ( * ) 	echo "Unknown command: '$*'" >&2
+  		echo "Try \`${0##*/} --help\`" >&2
+  		echo "or see $api_link" >&2
+  		exit 1
+  		;;
+esac
