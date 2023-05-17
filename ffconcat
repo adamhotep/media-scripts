@@ -2,9 +2,10 @@
 help() { cat <</help
 Concatenate given movies with ffmpeg, with chapters marking their original parts
 Usage: ffconcat [OPTIONS] MOVIE1 MOVIE2... OUTPUT
-  -n NAME, --name=NAME  Use NAME rather than the metadata title or filename.
-                        You can use this multiple times to name each chapter.
-                        The last one will be used for all remaining chapters.
+  -n NAME, --name  Use NAME rather than the metadata title or filename.
+                   You can use this multiple times to name each chapter.
+                   The last one will be used for all remaining chapters.
+  -q, --quiet      Show only warnings & errors. -qq: no warnings, -qqq: nothing
 
 NAME may contain a few variables (sorry, no escape character is supported):
   %CHAPTER%  The chapter number
@@ -18,7 +19,7 @@ Each movie must have the same streams (codecs, dimensions, time base, etc).
 See more at https://ffmpeg.org/ffmpeg-formats.html#concat
 
 A part of media-scripts, https://github.com/adamhotep/media-scripts
-ffconcat v0.3.20220813 copyright 2022+ by Adam Katz, GPLv2+
+ffconcat v0.3.20230517 copyright 2022+ by Adam Katz, GPLv2+
 /help
 }
 
@@ -32,7 +33,8 @@ die() { echo "$*" >&2; exit 2; }  # complain to STDERR and exit with error
 needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
 
 name=''
-while getopts hn:v-: OPT; do
+quiet=0
+while getopts hn:qv-: OPT; do
   if [ "$OPT" = - ]; then # --option https://stackoverflow.com/a/28466267/519360
     OPT="${OPTARG%%=*}" OPTARG="${OPTARG#$OPT}" OPTARG="${OPTARG#=}"
   fi
@@ -40,6 +42,7 @@ while getopts hn:v-: OPT; do
     ( h | help )	help; exit ;;
     # truncate at FS to prevent shenanigans. it's not printable anyway.
     ( n | name )	needs_arg; name="$name${name:+$FS}${OPTARG%%$FS*}" ;;
+    ( q | quiet )	quiet=$((quiet+1)) ;;
     ( usage )		usage; exit ;;
     ( v | version )	help |tail -n1; exit ;;
     ( ??* )		die "Illegal option --$OPT" ;;  # bad long option
@@ -47,6 +50,13 @@ while getopts hn:v-: OPT; do
   esac
 done
 shift $((OPTIND-1))
+
+case $quiet in
+  ( 0 )  quiet="" ;;
+  ( 1 )  quiet="-loglevel warning" ;;
+  ( 2 )  quiet="-loglevel fatal" ;;
+  ( 3 )  quiet="-loglevel quiet" ;;
+esac
 
 # `command -v` only reliably handles one command. `type` implements AND.
 if ! type ffmpeg ffprobe >/dev/null 2>&1; then
@@ -127,5 +137,5 @@ done |awk -v FS="$FS" -v rate=1000000 -v name_str="$name" '
   }
 ' > "$tmp/metadata"
 
-ffmpeg -f concat -safe 0 -i "$tmp/list.txt" -i "$tmp/metadata" \
+ffmpeg $quiet -f concat -safe 0 -i "$tmp/list.txt" -i "$tmp/metadata" \
       -map 0 -map_metadata 1 -map_chapters 1 -c copy "$output"
