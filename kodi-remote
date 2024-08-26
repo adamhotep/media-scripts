@@ -23,7 +23,7 @@ This requires you to have enabled the web server
 Docs for JSON, methods, and parameters: $api_link
 
 A part of media-scripts, https://github.com/adamhotep/media-scripts
-kodi-remote 0.2.20230423.1 copyright 2021+ by Adam Katz, GPLv2+
+kodi-remote 0.2.20240701.0 copyright 2021+ by Adam Katz, GPLv2+
 /help
   exit
 }
@@ -33,7 +33,7 @@ kodi-remote 0.2.20230423.1 copyright 2021+ by Adam Katz, GPLv2+
 warn() {
   if [ "$1" = -x ]; then die=2; shift; fi
   echo "$*" >&2
-  if [ "$die" -ge 0 ]; then exit $die; fi
+  if [ "${die:-0}" -ge 0 ]; then exit $die; fi
 }
 
 api_file_help() { cat <</api_help
