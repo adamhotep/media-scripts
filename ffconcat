@@ -20,7 +20,7 @@ Each movie must have the same streams (codecs, dimensions, time base, etc).
 See more at https://ffmpeg.org/ffmpeg-formats.html#concat
 
 A part of media-scripts, https://github.com/adamhotep/media-scripts
-ffconcat v0.4.20240825.0 copyright 2022+ by Adam Katz, GPLv2+
+ffconcat v0.4.20241105.0 copyright 2022+ by Adam Katz, GPLv2+
 /help
 }
 
@@ -71,9 +71,9 @@ if [ $# -lt 3 ]; then
 fi
 
 tmp="$(mktemp -d)"
-trap "sleep 90 && rm -rf $tmp" 0 1 2 5 9 11 15 18
+trap "sleep 90; rm -rf $tmp" 0 1 2 5 9 11 15 18
 
-output="$(eval echo '$'$#)"	# this is the final argument
+output="$(eval echo '$'$#)"	# the final argument (yes, a safe eval call)
 i=1
 
 for file in "$@"; do
