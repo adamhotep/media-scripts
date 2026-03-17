@@ -1,318 +1,709 @@
 #!/bin/sh
+self="${0##*/}"
 
 help() { cat <</help
-Get bitrate stats on given media files (from mplayer)
-Usage: bitrate [OPTIONS] [FILE|DIR...]
-  -a, --audio-only  Suppress video columns
-  -c, --condense    Shrink horizontally (default if viewport columns < 80)
-  -h, --help        Get help
-  -l, --long        Long listing (more columns, default if viewport width > 99)
-  -L, --short       Narrow listing (fewer columns, default if viewport < 100)
-  -q, --quiet       Suppress title and summary
-  -r, --recursive   Traverse recursively (does not follow symlinks)
-  -R                Traverse recursively (follow symlinks too)
-  -V, --version     Get version
-
-If given a directory as the sole argument, its contents will be examined.
-If given no arguments, all children of the current directory become arguments.
-Directory arguments are only parsed if they contain exactly ONE 160+M movie.
-
-COLUMNS (astersisked items are suppressed given --short or viewports < 100)
- Time         Up to Y:DD:HH:MM:SS
- Audio*       Codec, # audio tracks
- Video*       Codec
- Seconds*     Play time in seconds, to the tenths of seconds
- kbps         Kilobits per second (overall)
- MB/min       Megabytes (MiB) per minute
- xSD*         Pixels per second vs. std def (W x H x FPS) / (640 x 480 x 23.976)
- Dens         Density:  MB/min / xSD x 10 (tries to compensate for extra tracks)
- Size         File size
- Name         File name
+Get bitrate statistics on given media files
+Usage: $self [OPTIONS] [FILE|DIR...]
+  -a, --audio-only     Suppress video columns (incompatible with -f & --most)
+  --color[=WHEN]      Color/style the output: always, auto (default), never
+  -d, --max-depth=NUM  Traverse recursively up to depth NUM (default = 1)
+  -f, --fields=CSV     Use CSV for the fields to output (see --help-fields)
+  --follow             Follow symlinks (implied by -R/--recursive=all)
+  --help-fields        Explain the fields, including extra items for --fields
+  -l, --long           Long listing (more columns, default if width >= 100)
+  -L, --short          Narrow listing (fewer columns, default if width < 100)
+  --most               Show most of the available fields (see --help-fields)
+  -P, --no-path        When showing file names, omit their paths
+  -q, --quiet          Suppress title and totals rows
+  -r, -R, --recursive  Traverse recursively (-R & --recursive=all follow links)
+  -s, --stream, --tsv  Stream the output (good for watching full-library scans)
+                       Tab fields, don't condense (-c) (default if width >= 150)
+  -S, --condense       Condense column spacing (default if width < 150)
+  -S, --sort=CONFIG    none or CSV combinations of: case-sensitive, dictionary,
+                       human-units, month, numeric, reverse, version
+  -t, --truncate       Truncate output to the viewport width (\$COLUMNS)
+  -T, --truncate=NUM   Truncate output to NUM (default=0, no truncation)
+  -V, --version        Show version info for $self and its dependencies
 
 A part of media-scripts, https://github.com/adamhotep/media-scripts
-bitrate 1.6.20260316.0 Copyright 2010+ by Adam Katz <@adamhotep>, GPLv2+
 /help
+  exit
 }
-version() { help |sed '$!d'; }
+
+version() {
+  echo "bitrate 2.0.20260315.0 Copyright 2010+ by Adam Katz, GPLv2+"
+  mediainfo_version="$(mediainfo --version 2>/dev/null |sed '/ - v/!d;s// /')"
+  jq_version="$(jq --version 2>/dev/null |tr - ' ')"
+  mediainfo_version="${mediainfo_version:-MediaInfo (needs installation)}"
+  jq_version="${jq_version:-jq (needs installation)}"
+  echo "powered by $mediainfo_version, parsed by $jq_version"
+  exit
+}
+
+# As a safety for documentation containing Unicode, this checks $LC_ALL & $LANG
+# for support and downgrades when needed. To see which characters need that, run
+# test text through `GREP_COLORS=ms=7 grep -P --color '[^\s!-~]'`
+# (or, in vim, search for `[^[:space:]!-~]`
+# Force the downgrade with `LANG=C bitrate --help-fields`
+if [ "${LC_ALL:-C}" = "${LC_ALL%.UTF-8}" ] || [ "$LANG" = "${LANG%.UTF-8}" ]
+  then unicode=
+  else unicode=unicode
+fi
+unicode2ascii() {
+  if [ "$unicode" = unicode ]
+    then cat
+    else sed 's/❌/- /g; s/×/x/g; s/✅/Y /g; s/Ｓ/S /; s/Ｌ/L /; s/Ｍ/M /'
+  fi
+}
+
+help_fields() { unicode2ascii <</help
+Field  Ｓ SA Ｌ LA Ｍ Description (S=--short L=--long A=--audio-only M=--most)
+Time   ✅ ✅ ✅ ✅ ✅ Human-readable time: "MM:SS", "HH:MM:SS", or "Dd HH:MM:SS"
+Audio  ❌ ✅ ✅ ✅ ❌ Default audio codec, prefaced by stream count if > 1
+Video  ❌ ❌ ✅ ❌ ❌ Default video (or image) codec, with streams if > 1
+Secs   ❌ ✅ ❌ ✅ ✅ Play time in seconds, to the tenths of seconds
+kbps   ✅ ✅ ✅ ✅ ✅ Kilobits per second (overall)
+MB/min ✅ ❌ ✅ ✅ ✅ Megabytes (MiB) per minute
+xSD    ✅ ✅ ❌ ✅ ✅ Pixels per second vs. std def: W×H×FPS / 640×480×23.976
+Dens   ✅ ✅ ❌ ✅ ✅ Density: MB/min / xSD x 10 (excludes audio bitrate)
+Size   ✅ ✅ ✅ ✅ ✅ Human-readable file size
+Name   ✅ ✅ ✅ ✅ ✅ File name (full path)
+
+Nondefault field      Description  (* = --most)
+acodec*, vcodec*      Just the audio/video codec name, no optional stream count
+astreams*, vstreams*  The number of audio or video streams (titled as A or V)
+Bytes                 File size in bytes
+Chapters*             The number of chapters ("Menu" items, titled as Ch)
+File                  File name without its path
+fps*                  Video frames per second
+kbps_raw              Kilobits per second, unrounded
+Seconds_raw, ms       Play time in seconds (unrounded) or milliseconds (rounded)
+Subs*                 The number of text streams (subtitles)
+vbps, vkbps*          Video-specific bits or kilobits per second, rounded
+
+Totals for video items (xSD, Dens, vbps, vkbps, etc) ignore non-video content.
+/help
+  exit
+}
+
+die() { printf '%s\n' "$@" >&2; exit ${exit:-2}; }
 
 we_have() { type "$@" >/dev/null 2>&1; }
-die() { printf '%s\n' "$@" >&2; exit 2; }
 
-if ! we_have mplayer; then
-  if we_have mplayer2
-    then mplayer() { mplayer2 ${1+"$@"}; }
-    else die "This script requires mplayer"
+needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
+
+needs_num() {
+  if ! [ "$OPTARG" -ge 0 ] 2>/dev/null; then
+    die "$self: -$O$OPT needs a positive integer argument"
   fi
-fi
-
-is_media() {
-  file "$1" |sed 's/^[^:]*://' |grep -i -e audio -e video -e movie \
-    -e matroska -e mpeg -e quicktime -e mp4 -e h264 -e midi -e webm >/dev/null
 }
 
-AUDIO_ONLY=0 LONG=0
-if ! [ "$COLUMNS" -gt 9 ] 2>/dev/null; then
-  COLUMNS="$(tput cols)"
-  export COLUMNS="${COLUMNS:-80}"
-fi
-if [ "$COLUMNS" -lt 80 ]; then
-  CONDENSE=1
-elif [ "$COLUMNS" -ge 100 ]; then
-  LONG=1
+# Race condition bug in dash < 0.5.12. Use bash if we have it and lack pipefail
+# (we have a workaround compatible with older dash below, but it adds a delay)
+if we_have bash && [ -z "$BASH_VERSION" ] \
+&& ! (eval 'set -o pipefail' 2>/dev/null); then
+  exec bash --posix "$0" "$@"
 fi
 
-while getopts acClLhqrRvV-: OPT; do
+
+# defaults
+audio_only=0
+cols="$COLUMNS"
+depth=AUTO
+deref=
+fields=
+follow_links=
+long=1
+no_linkdirs='( -not -type l -o ( -type l -exec test ! -d {} ; ) )'
+no_path=show_path
+no_sort=
+quiet=
+shed_dot=keep_dot
+sort=
+sort_rev=
+stream=condense
+title=
+trunc=0
+yes_case=
+
+# Note, the https://no-color.org ~spec for $NO_COLOR actually says
+# > Should the presence of NO_COLOR disable other styling such as bold,
+# > underline, and italic? No. This standard only signals the user’s intention
+# > regarding adding ANSI color to text output.
+# This script does not currently add colors, just underlines and overlines
+# ... and color-inversion, which is still black & white, not color.
+#if [ -z "$NO_COLOR" ] && [ -n "$CLICOLOR_FORCE" -o -t 1 ]; then
+if [ -n "$CLICOLOR_FORCE" -o -t 1 ]; then
+  color=always
+else
+  color=never
+fi
+
+if ! [ "$cols" -gt 9 ] 2>/dev/null; then
+  cols="$(tput cols)"
+  cols="${cols:-80}"
+  export COLUMNS="$cols"
+fi
+if [ "$cols" -ge 150 ]; then
+  stream=stream
+elif [ "$cols" -lt 100 ]; then
+  long=0
+fi
+
+while getopts ad:f:lLhPqrRsStT:vV-: OPT; do
+  O=
   if [ "$OPT" = - ]; then  # --long, https://stackoverflow.com/a/28466267/519360
-    OPT="${OPTARG%%=*}" OPTARG="${OPTARG#"$OPT"}" OPTARG="${OPTARG#=}"
+    OPT="${OPTARG%%=*}" OPTARG="${OPTARG#"$OPT"}" OPTARG="${OPTARG#=}" O=-
   fi
   case $OPT in
-    ( a | audio* )		AUDIO_ONLY=1 ;;
-    ( C | cond*=[Nn0]*|wide* )	CONDENSE=0 ;;
-    ( c | cond* )		CONDENSE=1 ;;
-    ( h | help* )		help; exit 0 ;;
-    ( l | long*=[Nn0]*|short )	LONG=0 ;;
-    ( L | long*|verb* )		LONG=1 ;;
-    ( q | quiet* )		QUIET=1 ;;
-    ( r | deref*rec*|rec*lin* )	RECURSIVE=2 ;;
-    ( R | recur* )		RECURSIVE=1 ;;
-    ( v | verb* )		LONG=1 VERBOSE=1 ;;
-    ( V | ver* )		version; exit 0 ;;
-    ( \? )			die "Try --help" ;;
-    ( * )			die "Illegal option --$OPT" "Try --help" ;;
+    ( a | audio* )	audio_only=1 ;;
+    ( colo[ur]* )	color="${OPTARG:-always}" ;;
+    ( d | max*depth )	needs_num; depth="-maxdepth $OPTARG" ;;
+    ( debug )		PS4='${0##*/}${LINENO:+:\$LINENO}+ '; set -x; : DEBUG ;;
+    ( deref*|follow* )	deref=deref ;;
+    ( f | fields )	needs_arg; fields="$OPTARG" long=0 ;;
+    ( help-field* )	help_fields ;;
+    ( h | help* )	case $OPTARG in (*f*) help_fields ;; (*) help ;; esac ;;
+    ( l | long )	long=1 ;;
+    ( L | short )	long=0 ;;
+    ( most | more )	long=3 ;;
+    ( P | no-path )	no_path=no_path ;;
+    ( q | quiet* )	quiet=quiet ;;
+    ( r )		depth= ;;
+    ( R )		depth= deref=deref ;;
+    ( recursive )	depth=; case $OPTARG in (all|fol*) deref=deref;; esac ;;
+    ( s | stream* )	if [ "$OPTARG" = "${OPTARG#[Nn0FfCc]}" ]
+    			then stream=stream; else stream=condense; fi ;;
+    ( S )		stream=condense ;;
+    ( sort )		needs_arg; sort="$OPTARG" ;;
+    ( t )		trunc="$cols" ;;
+    ( T | trunc* )	OPTARG="${OPTARG:-$cols}"; needs_num; trunc="$OPTARG" ;;
+    ( v | verb* )	quiet=verbose long=1 ;;
+    ( V | ver* )	version ;;
+    ( \? )		die "Try --help" ;;
+    ( * )		die "Illegal option --$OPT" "Try --help" ;;
   esac
 done
-shift $((OPTIND-1))
+shift $(( OPTIND - 1 ))
 
-if [ 1 = "$CONDENSE" ]; then
-  if ! we_have columns; then columns() { column -t; }; fi
-  if ! we_have trunc; then
-    trunc() { awk -v cols="${COLUMNS:-80}" '{ print substr($0, 1, cols) }'; }
-  fi
-  out() { columns -s |trunc; }
-else
-  out() { cat; }
+if ! we_have mediainfo jq; then
+  # try to find the package manager, fall back to apt if none are found
+  i=" install"
+  for pkg in "apt$i" "apt-get$i" "dnf$i" "yum$i" pacman\ -S "zypper$i" "pkg$i" \
+  apk\ add pkg_add emerge nix-env\ -iA "guix package -i" "apt$i"; do
+    we_have "${pkg%% *}" && break
+  done
+  die "This program requires mediainfo and jq to function." \
+    "Please run something like \`$pkg mediainfo jq\`"
 fi
 
-details_loop() {
-  total_time=0
-  total_size=0
-  #total_pix=0
+# we default to everything in the current directory (via `${@:-.}` below),
+# but that adds a leading `./` to each entry. This strips it.
+if [ $# -eq 0 ]; then shed_dot=shed_dot; fi
 
-  #         1      2   3     4    5    6      7     8    9   10
-  title="Seconds^Time^Size^Name^kbps^MB/min^Audio^Video^xSD^Dens"
-
-  for movie in "$@"; do
-    # directory - only include if it contains ONE 160+ MB file
-    if [ -d "$movie" ]; then
-      if [ 1 = "$VERBOSE" ]; then
-        movie="$(find "$movie" -size +160M)"
-      elif ! [ -r "$movie" ]; then
-        continue
-      else
-        movie="$(find "$movie" -size +160M 2>/dev/null)"
-      fi
-      if ! [ -s "$movie" ]; then continue; fi
-    fi
-    if ! [ -e "$movie" ]; then # doesn't exist: steal error from 'file'
-      file "$movie" |sed "s/^[^:]*/${0##*/}/" >&2
-      continue
-    fi
-
-    unset ID_AUDIO_CODEC ID_VIDEO_CODEC ID_LENGTH \
-          ID_VIDEO_WIDTH ID_VIDEO_HEIGHT ID_VIDEO_FPS
-    eval $(mplayer -vo null -ao null -forceidx -frames 0 -identify "$movie" \
-            2>/dev/null |sed '/^ID_/!d; s/[]()|&;<>`'"'"'\\!$" []/\\&/g')
-
-    audio="${ID_AUDIO_CODEC:-none}"
-    video="${ID_VIDEO_CODEC:-none}"
-    fps="$ID_VIDEO_FPS"
-    audio="${audio#ff}"
-    audio="${audio%float}"
-    video="${video#ff}"
-
-    time="${ID_LENGTH:-0}"
-    tc="$(printf "%.0f" "$time")"	# round time to an integer
-    if ! [ "$tc" -gt 0 ] 2>/dev/null; then
-      is_media "$movie" || continue
-    fi
-    size="$(du -skL "$movie" |awk '{print $1}')"
-
-    if [ -n "$LONG" ]; then
-
-      if [ "$((tc*ID_VIDEO_WIDTH*ID_VIDEO_HEIGHT))" -gt 0 ] 2>/dev/null; then
-        if ! [ "${fps%%.*}" -gt 0 -o "${fps##*.}" -ge 0 ] 2>/dev/null; then
-          fps=23.976 # assumption for invalid rate (24/1.001 is too precise)
-        elif [ "$fps" = "59.940"  ]; then
-          fps=25 # Handbrake's "Peak Framerate (VFR)" results in "59.940fps"
-        elif [ "${fps%%.*}" -ge 31 ]; then
-          fps=31 # limit just how much "better" this makes things
-        fi
-        pix="$(awk -v w="$ID_VIDEO_WIDTH" -v h="$ID_VIDEO_HEIGHT" -v f="$fps" '
-          BEGIN { printf "%.2f", w * h * f / (640 * 480 * 23.976) }'
-        )"
-      else
-        pix=0
-      fi
-      #echo "pix=$pix" >&2
-      #total_pix=$((total_pix+${pix%%.*}))
-
-      if [ -z "$total_audio" ]
-        then total_audio="$audio"
-        elif [ "$total_audio" != "$audio" ]
-          then total_audio=mixed
-      fi
-      if [ -z "$total_video" ]
-        then total_video="$video"
-        elif [ "$total_video" != "$video" ]
-          then total_video=mixed
-      fi
-
-      if [ "$movie" != "${movie%.[Mm][Kk][Vv]}" ] && we_have mkvinfo; then
-        # echos either nothing (no extra tracks) or "N@" where N is track count
-        # Usage: count_tracks Audio|Video       CASE MATTERS HERE
-        count_tracks() {
-          local tracks
-          tracks="$(mkvinfo "$movie" 2>/dev/null |grep -c "$1 track")"
-          if [ $tracks -gt 1 ]; then echo "$tracks@"; fi
+case $color in
+  ( auto | TTY | tty ) [ -t 1 ] && color=always || color=never ;;
+esac
+total_mark='//totals\\'
+has_total_mark='tm = index($0, "'"$total_mark"'") { $0 = substr($0, 1, tm-1) }'
+case $quiet:$color in
+  ( :always | :yes | :1 | verbose:always | verbose:yes | verbose:1 )
+    color=color
+    PS4="[1;35m${PS4% }[m "
+    style() {
+      awk -v cols="$cols" -v stream="$stream" '
+        function sgr_row(code) {
+          return sprintf("%c[%sm%-*s%c[m", 27, code, cols, $0, 27)
         }
-        audio="$(count_tracks Audio)$audio"
-        video="$(count_tracks Video)$video"
-      fi
+        BEGIN { if (stream == "stream") cols = 0 }
+        NR == 1 { $0 = sgr_row(4) }
+        '"$has_total_mark"'
+        tm { $0 = sgr_row(53) }
+        1
+      '
+    } ;;
+  ( * ) color=; style() { awk "$has_total_mark"' 1'; } ;;
+esac
 
-    fi
-
-    total_time=$((total_time+tc))
-    total_size=$((total_size+size))
-
-    if [ "$tc" = 0 ] && [ "$size" -gt 62 ]
-      then tc="?"
-      elif we_have timecalc
-        then tc="$(timecalc $tc)"
-    fi
-    if [ -n "$title" ] && [ -z "$QUIET" ]; then echo "$title"; unset title; fi
-    #       1    2    3      4   5 6    7      8     9
-    echo "$time^$tc^$size^$movie^0^0^$audio^$video^$pix"
-  done
-
-  # print a summary if there was more than one file
-  if [ "$total_size" -gt "${size:-1}" ] && [ -z "$QUIET" ]; then
-    we_have timecalc && tc="$(timecalc $total_time)" || tc="$total_time"
-    #echo "$total_time^$tc^$total_size^(overall)^ ^ ^ ^ ^$total_pix"
-    #          1       2      3          4      5 6       7            8
-    echo "$total_time^$tc^$total_size^(overall)^ ^ ^$total_audio^$total_video^-"
+if [ "$trunc" -gt 0 ]; then
+  utf8perl() {
+    perl -pMutf8 -e "use open qw/:std :utf8/; my \$len = $trunc - 1; $@"
+  }
+  if we_have trunc; then	# in https://github.com/adamhotep/misc-scripts
+    case "$color:$unicode" in
+      ( color:* )	flag=-c ;;	# colored final character
+      ( :unicode )	flag=-d ;;	# ellipsis instead of final character
+      ( * )		flag=-C ;;	# uncolored final character
+    esac
+    trunc() { command trunc -w $trunc $flag; }	# properly count emoji, tab, etc
+  elif we_have perl && [ "$color" = color ] && [ -t 1 ]; then
+    # color-invert the final character of truncated lines (like my script)
+    trunc() { utf8perl 's/^(.{$len})(.).+/$1\e[7m$2\e[m/'; }
+  elif we_have perl && [ "$unicode" = unicode ]; then
+    trunc() { utf8perl 's/^(.{$len})..+/$1…/'; }
+  else
+    trunc() { awk -v cols="$trunc" '{ print substr($0, 1, cols) }'; }
   fi
+else
+  trunc() { cat; }
+fi
+
+# TODO (maybe, sounds HARD and error-prone): add logic to columns() with a timer
+#       to stream, calculating columns so far, plus some padding for time?
+#       ... or just bailing and going back to tabs
+if [ "$stream" = condense ]; then
+  if we_have column && column --help 2>&1 |grep -q '\W-o\b'; then # util-linux
+    fieldcount=0
+    columns() {
+      column -o " " -t -l$fieldcount --table-right=$right_align
+    }
+  elif we_have columns; then	# in https://github.com/adamhotep/misc-scripts
+    columns() { command columns -s; }
+  elif we_have column; then	# BSD
+    columns() { column -ts '	'; }
+  else
+    : "No column/columns program found, ignoring request to condense"
+    columns() { cat; }
+  fi
+  out() { columns |trunc |style; }
+else
+  out() { trunc |style; }
+fi
+
+all_dirs=1
+no_dirs=no_dirs
+for f in "${@:-.}"; do
+  if [ -d "$f" ]; then no_dirs=has_dirs; fi
+  if [ ! -d "$f" ] && [ -e "$f" ]; then all_dirs=0; fi
+done
+
+if [ "$depth" = AUTO ]; then
+  depth="-maxdepth $all_dirs"
+fi
+
+if [ "$deref" = deref ]; then
+  follow_links=-L no_linkdirs=
+fi
+
+set_fields() {
+  local IFS=, f orig
+  fields=
+  for f in $1$2; do	# do not quote this, it breaks the IFS!
+    orig="$f"
+    f="$(echo "${f#[$]}" |tr A-Z a-z)" # no leading $, to lowercase
+    case "$no_path,$f" in	# preprocess with overrides
+      ( no_path,name | no_path,path )	f=file ;;
+    esac
+    case $f in
+      ( acodec ) 		f=acodec 	align=L t=Audio ;;
+      ( astream* | a )		f=astreams	align=R t=A ;;
+      ( audio ) 		f=audio 	align=L t=Audio ;;
+      ( bytes | byte )		f=bytes 	align=R t=Bytes ;;
+      ( chap* | ch )		f=chapters	align=R t=Ch ;;
+      ( den* )			f=dens		align=R t=Dens ;;
+      ( kbps )			f=kbps		align=R t=kbps ;;
+      ( mbpm | mb/min ) 	f=mBpm		align=R t=MB/min ;;
+      ( name* | path* )		f=name		align=L t=Name ;;
+      ( file* ) 		f=file		align=L t=Filename ;;
+      ( fps | frames* ) 	f=fps		align=R t=fps ;;
+      ( sec | secs | seconds )	f=seconds	align=R t=Secs ;;
+      ( size* ) 		f=size		align=R t=" Size" ;;
+      ( sub* )			f=subs		align=R t=Sub ;;
+      ( time )			f=time		align=R t="    Time" ;;
+      ( vbps )			f=vbps		align=R t=Video_bps ;;
+      ( vkbps ) 		f=vkbps		align=R t=vkbps ;;
+      ( vcodec* ) 		f=vcodec 	align=L t=Video ;;
+      ( video ) 		f=video 	align=L t=Video ;;
+      ( vstream* | v )		f=vstreams	align=R t=V ;;
+      ( xsd | sd )		f=xSD		align=R t=xSD ;;
+      ( *[!a-z_.,]* )	die "Invalid character provided in field '$orig'" ;;
+      ( * )	f="$orig"	align=L t="$f"; : "Note: custom field '$f'" ;;
+    esac
+    fieldcount=$(( fieldcount + 1 ))
+    fields="$fields${fields:+,}\$$f"
+    title="$title${title:+,}\"$t\""
+    if [ $align = R ]; then
+      right_align="$right_align${right_align:+,}$fieldcount"
+    fi
+  done
 }
 
-[ $# = 1 ] && [ -d "$1" ] && cd "$1" && shift
-[ $# = 0 ] && set -- *
-if [ -n "$RECURSIVE" ]; then
-  if [ 2 = "$RECURSIVE" ]; then LINKS="-L"; fi
-  # 13 line workaround for inabiltiy to run `find ... -print0 |xargs -0 set --`
-  # (yes, if we tracked options better, this could just be a recursive call
-  # rather than using `set --` but this seems preferable at the moment)
-  TMP="$(mktemp)"
-  trap "rm -f $TMP" 0
-  find $LINKS "$@" -type f > $TMP
-  START=1
-  while IFS= read -r LINE; do
-    if [ 1 = "$START" ]; then
-      unset START
-      set --
-    fi
-    set -- "$@" "$LINE"
-  done < $TMP
-  rm -f $TMP
-  trap - 0
+: "get fields from $fields:$audio_only$long - long: 1=short, 2=long, 3=most"
+case "$fields:$audio_only$long" in
+  ( :00 )	set_fields time,kbps,mBpm,size,name ;;
+  ( :01 )	set_fields time,audio,video,sec,kbps,mBpm,xSD,den,size,name ;;
+  ( :03 )	set_fields time,acodec,astreams,vcodec,vstreams,fps, \
+  		chapters,subs,sec,vkbps,kbps,mBpm,xSD,den,size,name ;;
+  ( :10 )	set_fields time,audio,kbps,size,name ;;
+  ( :11 )	set_fields time,audio,sec,kbps,mBpm,size,name ;;
+  ( :13 )	die "--audio-only doesn't work with --most" ;;
+  ( *?:*[!0]* ) die "--fields doesn't work with: --short/--long/--most" ;;
+  ( *?:* )	set_fields "$fields" ;;
+esac
+
+# manage sort {{{
+# sadly, we can't implement all of the sort options in `ls`, just `sort`
+sort_opt() {
+  local err="Invalid sort config '$1'"
+  case $1 in
+    ( case*	| F | -F )	yes_case=yes_case ;;
+    ( dic*	| d | -d )	sort="$sort --dictionary-order" ;;
+    ( hum*	| h | -h )	sort="$sort --human-numeric-sort" ;;
+    ( ign*	| f | -f )	yes_case= ;;
+    ( mon*	| m | -m )	sort="$sort --month-sort" ;;
+    ( num*	| n | -n )	sort="$sort --numeric-sort" ;;
+    ( rev*	| r | -r )	sort_rev=sort_rev sort="$sort --reverse" ;;
+    ( rand*	| R | -R )	sort="$sort --random-sort" ;;
+    ( ver*	| V | -V )	sort="$sort --version-sort" ;;
+    ( none	| 0 | -0 )	no_sort=no_sort ;;
+    ( [!$a-]* | [$a-]*[!$a]* )	die "$err" ;;
+    ( * )	[ "$2" = getopts ] && die "$err" || return 11 ;;
+  esac
+}
+
+set_sort() {
+  local IFS=, OPT first=first a=FdhfmnrRV0
+  sort=
+  for OPT in $@; do
+    if [ "$first" = first ]; then first=; set --; fi
+    sort_opt "$OPT" || set -- "$@" "-$OPT"
+  done
+  while getopts $a-: OPT; do	# second pass for combined single-char options
+    sort_opt "$OPT" getopts
+  done
+}
+
+set_sort "$sort"
+
+if [ "$no_sort" = no_sort ]; then
+  if [ "$sort_rev" = sort_rev ] && we_have tac; then	# reverse but don't sort
+    sorter() { tac; }
+  else
+    sorter() { cat; }
+  fi
+else
+  if [ "$yes_case" = yes_case ]; then
+    sorter() { LC_ALL=C sort $sort; } # likely breaks sorting for some locales
+  else
+    sorter() { sort $sort --ignore-case; }
+  fi
 fi
-details_loop "$@" |awk -F^ -v LONG="$LONG" -v AUDIO_ONLY="$AUDIO_ONLY" '
- BEGIN { retval = 1; }
- function squish(num) {
-   if (num >= 100) {
-     num = sprintf("%.0f", num);
-   } else { if (num >= 10) {
-     num = sprintf("%.1f", num);
-   } else { if (num > 0) {
-     num = sprintf("%.2f", num);
-   } else {
-     num = "-";
-   } } }
-   return num;
- }
- $3 > 10 && $2 != "Time" {
-   for ( i=1; i<=NF; i++) { $i == " " && $i = ""; }
+# done managing sort }}}
 
-   ifdensity = $6;
+# swap dollar signs (per-row data) for dots (aggregate data)
+totals="$(echo "$fields" |sed 's/[$]/./g')"
 
-   if ( $1 == 0 ) {
-     $5 = "?";
-     ifdensity = $5;
-   } else {
-     $5 = sprintf("%d", $3*8/$1);
-     ifdensity = $3 * 60 / 1024 / $1;
-   }
-   $6 = squish(ifdensity);
+# create file descriptors for redirection (to save exit codes & error output)
+fifo() {
+  local f="$(mktemp -u 2>/dev/null || echo "${TMPDIR:-/tmp}/bitrate-$1.$$")"
+  mkfifo "$f"
+  echo "$f"
+}
+find_status="$(fifo find_status)"
+jq_status="$(fifo jq_status)"
+errors="$(fifo errors)"
+trap 'rm -f "$find_status $jq_status" "$errors"' EXIT INT TERM HUP
 
-   $10 = "-";
-   if ($9 > 0) {
-     density = ifdensity;
+# filter errors to identify this script rather than find
+sed "s/^[^:]*: /$self: /" <"$errors" >&2 &
+sed_id=$?
 
-     # AUDIO - facilitate multiple tracks
-     # raw/true track info:   mkvinfo -t movie.mkv |tail
-     tracks = $7;
-     gsub(/@.*/,"",tracks);
-     if (tracks*1 > 1) {
-       tracks--;
-       density -= tracks * 64 * 60/8/1024; # ASSUME extra audio tracks @ 64kbps
-     }
-     # assume AC3=384kbps, others=128
-     if ($7 ~ /ac3/) { density -= 256 * 60/8/1024; }
-     if ($7 ~ /none/) { density += 128 * 60/8/1024; }
+# this odd nesting is needed in order to capture exit codes and find's stderr
+{
+  {
+    # yes, this introduces a bug when filenames contain newlines. don't do that!
+    if [ "$depth" = "-maxdepth 0" ] \
+    || [ "$no_sort $no_dirs $depth" = "no_sort no_dirs -maxdepth 1" ]; then
+      printf '%s\n' "$@"
+    else
+      find $follow_links "${@:-.}" $depth -not -type d $no_linkdirs -print \
+        2>"$errors"
+    fi
+    echo $? >"$find_status"	# save the exit code from find
+  } |sorter | {
+    read in || exit $ret	# do not send empty data to mediainfo
+    # we just read in the first line. { print it and the rest } into awk,
+    # which sheds the leading dot on the auto-added './' (for no args)
+    # and null-delimits the list for xargs to then send to mediainfo
+    { printf '%s\n' "$in"; cat; } |awk -v shed_dot=$shed_dot '
+      shed_dot == "shed_dot" && 1 == index($0, "./") { $0 = substr($0, 3) }
+      { printf "%s%c", $0, 0 }
+    ' |xargs -0 mediainfo --full --output=JSON
+  } | {
+    jq -cr --argjson quiet "\"$quiet\"" --argjson title "[ $title ]" '
 
-     # VIDEO - facilitate multiple tracks (cycle through them in mplayer with _)
-     tracks = $8;
-     gsub(/@.*/,"",tracks);
-     if (tracks*1 > 1) {
-       # ASSUME remaining audio is 128kbps, ASSUME all video tracks are equal
-       assumed_audio_base = 128 * 60/8/1024;
-       density = (density - assumed_audio_base) / tracks + assumed_audio_base;
-     }
+# TIP: If viewing this in vim, try `set ft=jq` when reviewing the jq code
 
-     $10 = sprintf("%.0f", density*10/$9);
-   }
-   $9 = squish($9);
+#####################################
+# setup {{{
 
-   # human readable, accounting for rounding up, starting with Terabyte level
-   if ( $3 >= 99.95 * 1024^3 ) { $3 = sprintf("%4.0fT", $3/1024^3);
-   } else if ( $3 >= 9.995 * 1024^3 ) { $3 = sprintf("%4.1fT", $3/1024^3);
-   } else if ( $3 >= 1023.5 * 1024^2 ) { $3 = sprintf("%4.2fT", $3/1024^3);
-   # Gigabyte level
-   } else if ( $3 >= 99.95 * 1024^2 ) { $3 = sprintf("%4.0fG", $3/1024^2);
-   } else if ( $3 >= 9.995 * 1024^2 ) { $3 = sprintf("%4.1fG", $3/1024^2);
-   } else if ( $3 >= 1023.5 * 1024 ) { $3 = sprintf("%4.2fG", $3/1024^2);
-   # Megabyte level
-   } else if ( $3 >= 99.95 * 1024 ) { $3 = sprintf("%4.0fM", $3/1024);
-   } else if ( $3 >= 9.995 * 1024 ) { $3 = sprintf("%4.1fM", $3/1024);
-   } else if ( $3 >= 1023.5 ) { $3 = sprintf("%4.2fM", $3/1024);
-   # Kilobyte level
-   } else { $3 = sprintf("%4.0fk", $3);
-   }
+# functions to help formatting
+def tonum_or(or_else):	# using `tonumber?` wipes . but this works
+  if . then tonumber else or_else end;
+def round(decimals):
+  pow(10; decimals) as $prec |
+  tonumber? | . * $prec | round / $prec;
+def padx(width; char):
+  tostring as $str | (char * (width - ($str | length))) + $str;
+def pad(width): padx(width; " ");
+def pad0(width): padx(width; "0");
+def pad0(width; when): if (when) then pad0(width) else (. | tostring) end;
+def padr(decimals):
+  (. * (10 | pow(10; decimals)) | round | tostring | pad0(decimals+1)) as $p |
+  ($p[0:-decimals]) + "." + ($p[-decimals:]);
 
-   $1 = sprintf("%5.1f", $1);
-   retval = 0;
- }
- {
-   if (AUDIO_ONLY) {
-     if (LONG) {
-       printf "%9s %8s %7s %5s %6s %7s  %s\n", $2,$7,$1,$5,$6,$3,$4;
-     } else {
-       printf "%9s %5s %6s %7s  %s\n", $2,$5,$6,$3,$4;
-     }
-   } else if (LONG) {
-     printf "%9s %8s %6s %7s %5s %6s %5s %4s %7s  %s\n", \
-       $2,$7,$8,$1,$5,$6,$9,$10,$3,$4;
-   } else {
-     printf "%9s %5s %6s %4s %7s  %s\n", $2,$5,$6,$10,$3,$4;
-   }
- } END { exit retval; } # retval is rendered useless by the next line :-/
-' |out
+def sec2time:
+  ( tonumber? | round |
+    (if . >= 86400 then (. / 86400 | floor |tostring) + "d " else "" end) # days
+    + (if . >= 3600 then (. / 3600 | floor |tostring) + ":" else "" end) # hours
+    + (. / 60 % 60 | floor | pad0(2; . >= 3600))	# minutes
+    + ":" + (. % 60 | pad0(2))	# seconds
+  ) | pad(8);	# width=8 fits "23:59:59"; only an issue with --stream or BSD
+def time2sec:
+  split(":") | map(tonumber) |
+  .[length-1]						# seconds
+  + (if length > 1 then   60 * .[length-2] else 0 end)	# minutes
+  + (if length > 2 then 3600 * .[length-3] else 0 end);	# hours
 
+# LS-style human-readable file sizes, never over 4 characters (when < 1,000T)
+def size2human:
+  1099511627776 as $TB | 1073741824 as $GB | 1048576 as $MB | 1024 as $KB |
+  if   . >= 9.995  * $TB then (. / $TB | round    | tostring) + "T"
+  elif . >= 1023.5 * $GB then (. / $TB | round(1) | tostring) + "T"
+  elif . >= 9.995  * $GB then (. / $GB | round    | tostring) + "G"
+  elif . >= 1023.5 * $MB then (. / $GB | round(1) | tostring) + "G"
+  elif . >= 9.995  * $MB then (. / $MB | round    | tostring) + "M"
+  elif . >= 1023.5 * $KB then (. / $MB | round(1) | tostring) + "M"
+  elif . >= 9.995  * $KB then (. / $KB | round    | tostring) + "K"
+  elif . >= 1024         then (. / $KB | round(1) | tostring) + "K"
+  else (. | tostring)
+  end | pad(4); 	# pad to a width of 4 to right-align
+
+# given an array, if all values are equal, return that. Otherwise, "mixed"
+def same_or_mixed:
+  # strip off the leading track count (if present) first
+  map(sub("^[0-9]+@"; "")) |
+  if unique | length == 1 then .[0] else "mixed" end;
+
+# end setup }}}
+
+#####################################
+# parsing pipeline (streaming, though that is moot if condensing) {{{
+
+# force single items into an array so we can parse as an array
+(if type == "array" then . else [.] end) as $all |
+($all | map( select(
+  (any(.media.track[]?; .["@type"] == "General"))
+  # only examine media with audio and/or video tracks
+  and (any(.media.track[]?; .["@type"] == "Audio" or .["@type"] == "Video"))
+))) as $all |
+
+($all | length) as $length |
+
+if ($length < 1) then
+  "No media found\n" | error(1)
+else
+  .
+end |
+
+# TITLE ROW
+if $quiet != "quiet" then ($title | @tsv) else empty end,
+
+foreach $all[] as $row (
+
+  # format: foreach STREAM as $var ( INIT; UPDATE; EXTRACT )
+  # INIT	is run once at the beginning (like BEGIN in awk)
+  # UPDATE	is for setting states (run per line)
+  # EXTRACT	is for outputting (run per line)
+
+  # INIT (run once)
+  # Empty since jq acts like awk: `null + 4 = 4` and `null + "hi" = "hi`
+  {};
+
+  # UPDATE (per input) {{{
+  .count += 1 |
+
+  # convenience aliases
+  $row.media.track as $track |
+
+  (first($track[] | select(."@type" == "General"))? // {}) as $general_part |
+
+  (first($track[] | select(."@type" == "Audio" and ."Default" == "Yes"))?
+    // first($track[] | select(."@type" == "Audio" and ."Default" != "No"))?
+    // first($track[] | select(."@type" == "Audio"))?
+    // {}
+  ) as $audio_part |
+
+  (first($track[] | select(."@type" == "Video" and ."Default" == "Yes"))?
+    // first($track[] | select(."@type" == "Video" and ."Default" != "No"))?
+    // first($track[] | select(."@type" == "Video"))?
+    // {}
+  ) as $video_part |
+
+  (first($track[] | select(."@type" == "Image"))? // {}) as $image_part |
+
+
+  #####################################
+  # field names
+
+  $row.media["@ref"] as $name |
+  ($name | gsub("^.*/"; "")) as $file |
+  .name += 1 |
+
+  ($general_part.FileSize | tonumber) as $bytes |
+  .bytes += $bytes |
+
+  ($bytes | size2human) as $size |
+
+  (($general_part.Duration
+      // if $video_part then $video_part.Duration else null end
+      // if $audio_part then $audio_part.Duration else null end
+    ) | tonum_or(0)) as $seconds_raw |
+  .seconds += $seconds_raw |
+
+  ($seconds_raw | padr(1)) as $seconds |
+  ($seconds_raw * 1000 | round) as $ms |
+
+  ($seconds | sec2time) as $time |
+
+(first($track[] | select(."@type" == "Menu") | 
+  ([.extra? // {} | to_entries[] | select(.key | test("[0-9][0-9]"))] | length)
+) // 0) as $chapters |
+
+  .chapters += $chapters |
+
+  ([$track[] | select(."@type" == "Text")] | length) as $subs |
+  .subs += $subs |
+
+  ([$track[] | select(."@type" == "Audio")] | length) as $astreams |
+  .astreams += $astreams |
+
+  # TODO (maybe): parse each stream, report "mixed" at the top level if mixed
+  # ... I am not sure I want that; showing the first default seems better
+  # (and they will be the same most (99%?) of the time)
+  (($audio_part.Format // "none") | gsub("\\s+"; "_")) as $acodec |
+  ((if $astreams > 1 then ($astreams | tostring) + "@" else "" end)
+    + $acodec) as $audio |
+  .audio //= $acodec |
+  if .audio != $acodec then .audio = "mixed" else . end |
+  .acodec = .audio |
+
+  (if $video_part | length > 0 then
+    ([$track[] | select(."@type" == "Video")] | length)
+  elif $image_part then
+    ([$track[] | select(."@type" == "Image")] | length)
+  else
+    0
+  end) as $vstreams |
+  .vstreams += $vstreams |
+
+  (if  $video_part | length > 0 then ($video_part.Format // "uknown")
+  elif $image_part | length > 0 then ($image_part.Format // "uknown")
+  else "none"
+  end | gsub("\\s+"; "_") | gsub("[^[:alnum:]]Video"; "")) as $vcodec |
+  ((if $vstreams > 1 then ($vstreams | tostring) + "@" else "" end)
+    + $vcodec) as $video |
+  .video //= $vcodec |
+  if .video != $vcodec then .video = "mixed" else . end |
+  .vcodec = .video |
+
+  ($general_part.OverallBitRate // ($bytes / $seconds_raw)
+    | tonum_or(0) / 1024) as $kbps_raw |
+
+  ($kbps_raw | round) as $kbps |
+
+  ($kbps_raw * 60 / 8 / 1024 | padr(2) ) as $mBpm |
+
+  # somehow, the . object gets lost in here, so we re-introduce it
+  (if ($video_part | length > 0) then
+    (($video_part.Width // $image_part.Width) | tonum_or(0)) as $w |
+    (($video_part.Height // $image_part.Height) | tonum_or(0)) as $h |
+    (($video_part.FrameRate // $video_part.FrameRate_Original
+      // $image_part.StreamCount) | tonum_or(1)) as $f |  # 1 is a cue for xSD
+    (if $f == 1 then "?" else ($f | padr(3)) end) as $f_ |
+    ($video_part.BitRate
+      # fail over to a blind assumption: overhead + audio bitrate = 128kbps
+      | tonum_or($general_part.OverallBitRate | tonum_or(0) as $b
+        | if $audio_part and $b > 131072 then $b - 131072 else $b end)) as $b |
+    ($b | round) as $b_ |
+    ($b / 1024 | round) as $kb |
+    # ratio of this video to a 640x480 video at 23.976 fps
+    ($w * $h * $f / 640 / 480 / (if $f == 1 then 1 else 23.976 end)) as $sd |
+    ($sd | padr(2)) as $sd_ |
+    .vsec	+= $seconds_raw |
+    .width	+= $w * $seconds_raw |
+    .height	+= $h * $seconds_raw |
+    .vbps	+= $b * $seconds_raw |
+    .vkbps	+= $b * $seconds_raw / 1024 |
+    .xSD	+= $sd * $seconds_raw |
+    .fps |= (if $f == 1 or type != "number" then "?"
+      else . + $f * $seconds_raw end) |
+    [ ., $w, $h, $f_, $b_, $kb, $sd, $sd_ ]
+  else [ ., "-", "-", "-", "-", "-", "-", "-" ]
+  end) as [ $obj, $width, $height, $fps, $vbps, $vkbps, $xSD_raw, $xSD ] |
+  $obj |
+
+  # NOTE! Density now tries to account for JUST the video content.
+  # See above how $vbps is just for video (we subtract an assumed 128kbps
+  # for audio if we have to fall back to the overall bitrate)
+  (if $xSD_raw == "-" then "-"
+  else ($vbps * 60 / 8 / 1048576 / $xSD_raw * 10)
+  end) as $dens |
+  if $dens != "-" then .dens += $dens * $seconds_raw else . end |
+  (if $dens != "-" then $dens | round else "-" end) as $dens |
+
+  (if $vbps == 0  then "-" else $vbps  end) as $vbps |
+  (if $vkbps == 0 then "-" else $vkbps end) as $vkbps |
+
+  .row = [ '"$fields"' ]	# save the output we want
+  ;	# end UPDATE }}}
+
+  # EXTRACT (per input)
+  (.row | @tsv),	# emit the row
+
+  # totals row
+  if $quiet != "quiet" and .count > 1 and .count >= ($length) then
+
+    .dens	= if .vsec > 0 then ((.dens / .vsec) | round(1)) else "-" end |
+    .dens	= if .dens != "-" and .dens >= 10 then
+    		    (.dens | round) else .dens end |
+    .file	= ("(total across " + (.name | tostring) + " files)") |
+    .fps	= (if .vsec > 0 and (.fps | type == "number") then
+    		    (.fps / .vsec) | padr(3) else .fps // "-" end) |
+    .kbps	= (.bytes / .seconds * 8 / 1024 | round) |
+    .mBpm	= (.bytes * 60 / 1048576 / .seconds | padr(2)) |
+    .ms 	= (.seconds * 1000 | round) |
+    .name	= .file |
+    .seconds_raw = .seconds |
+    .seconds	= (.seconds | round(1)) |
+    .size	= (.bytes | size2human ) |
+    .time	= (.seconds | sec2time) |
+    .vbps	= if .vsec > 0 then ((.vbps / .vsec) | round) else "-" end |
+    .vkbps	= if .vsec > 0 then ((.vkbps / .vsec) | round) else "-" end |
+    .xSD	= if .vsec > 0 then ((.xSD / .vsec) | round(2)) else "-" end |
+
+    ([ '"$totals"' ] | @tsv) + "'"$total_mark"'"
+  else
+    empty
+  end
+
+)	# end foreach and pipeline processing }}}
+
+# end JQ code
+#####################################
+    '
+    echo $? >"$jq_status"	# save the exit code from jq
+  } | out
+  kill -HUP $sed_id
+} &
+
+read find_exit < "$find_status"
+# workaround for bug in dash < 5.12, which we can detect with this command
+(eval 'set -o pipefail' 2>/dev/null) || sleep 0.7 2>/dev/null || sleep 1
+read jq_exit < "$jq_status"
+wait
+find_exit="${find_exit:-123}"	# default (an error), likely unnecessary
+jq_exit="${jq_exit:-123}"	# default (an error), likely unnecessary
+
+# exit with the higher (worse) exit code from find or jq
+exit $(( $find_exit > $jq_exit ? $find_exit : $jq_exit ))
