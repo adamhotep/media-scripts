@@ -1,0 +1,69 @@
+#!/bin/sh
+help() { cat <</help
+Stream a video over SSH and play locally with mpv
+Usage: ${0##*/} [OPTIONS] [USER@][ssh://]HOST:PATH
+
+  --help              View this help about this wrapper script
+  --ssh@SSH_OPTION    Pass SSH_OPTION to ssh, not to mpv
+                      Note that spaces are not allowed at all here and that
+                      arguments must be attached, they cannot follow;
+                      \`mpvssh -D1234\` works, \`mpvssh -D 1234\` does not.
+
+All other OPTIONS are passed to mpv. See also \`ssh --help\` and \`mpv --help\`.
+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+mpvssh 0.3.20240704.0 copyright 2020+ by Adam Katz, GPLv2+
+/help
+}
+
+if ! type mpv ssh >/dev/null; then
+  echo 'You are missing either mpv or ssh.' >&2
+  echo 'Consider something like `apt install mpv ssh`' >&2
+  exit 1
+fi
+
+# Sneak ssh:// into the list of protocols (useful for completion)
+case " $*" in ( *[[:space:]]--list-protocols* )
+  mpv "$@" |awk '
+    insertion && NF == 0 { print insertion; x = 1; insertion = 0 }
+    $1 == "Total:" && $3 == "protocols" { $2 += x }
+    { print }
+    sub("https://", "ssh://") { insertion = $0 }
+    END { exit !x }
+  '
+  exit $?
+;; esac
+
+# set $last to the final parameter and remove the final parameter from $@
+i=0 x=$# ssh_options=
+for last in "$@"; do
+  i=$((i+1))
+  if [ $i = 1  ]; then set --; fi
+  if [ "$last" != "${last#--ssh@}" ]; then
+    ssh_options="$ssh_options ${last#--ssh@}"
+    continue
+  fi
+  if [ $i = $x ]; then break; fi
+  set -- "$@" "$last"
+done
+
+title="$last"
+
+case "$last" in 	# strip optional leading ssh:// or ssh:
+  ( ssh://* )	last="${last#ssh://}" ;;
+  ( ssh:*:* )	last="${last#ssh:}" ;;
+esac
+
+if [ "$last" != "${last#?*[:/]?*}" ]; then	# looks like HOST:PATH
+
+  title=$(echo "$title" |sed -E 's/\\\\/\\/g; s/\\([^[:alnum:]])/\1/g')
+
+  # ssh HOST cat PATH |mpv --title=ssh:HOST:PATH [MPV ARGS] appending://-
+  ssh $ssh_options "${last%%[:/]*}" cat "${last#*[:/]}" \
+    |mpv --title="$title" "$@" appending://-
+
+else
+
+  ssh $ssh_options "$last" |mpv --title="ssh $last" "$@" appending://-
+
+fi
