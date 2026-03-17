@@ -1,0 +1,286 @@
+#!/bin/sh
+help() { cat <</help
+Rename, re-date, and optionally shrink/convert images given EXIF information
+Usage: exifname [OPTIONS] FILE...
+  --date=PATH                Manually set the path to GNU/BSD/busybox \`date\`
+  --exitfool=PATH            Manually set the path to \`exiftool\`
+  --magick=PATH              Manually set the path to \`magick\`
+  --dry-run                  Don't do anything, just say what would be done
+  -f, --date-format          Date format to prefix with (see \`date --help\`)
+                             Currently set to \`$datefmt\`
+  -i, --in-place             Do not rename the file, overwrite the original
+  -q, --quality=QUALITY      Set quality: 0-100
+  -r, --recursive            Traverse subdirectories
+  -s, --size=WIDTHxHEIGHT    Maximum dimensions (preserves aspect ratio)
+  -t, --target=PATH          Path to save output (defaults to the same dir)
+  -v, --verbose              Say more about what is happening
+  -x, --extension=EXTENSION  Change to this output file extension (and format)
+  -y, --force                Say "yes" to all overwrite requests
+  -z, --timezone=[+-]OFFSET  Default time zone when missing in EXIF data
+                             OFFSET may be H, HH, HMM, HHMM, H:MM, or HH:MM
+                             The default uses the local time zone at that date
+
+/help
+  version
+}
+
+version() {
+  echo "A part of media-scripts, https://github.com/adamhotep/media-scripts"
+  echo "exifname 0.2.20250328.0 copyright 2025+ by Adam Katz, GPLv3+"
+  exit
+}
+
+die() { printf "%s\n" "$@" >&2; exit 2; } # complain to STDERR & exit with error
+
+needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
+
+we_have() { command -v "$@" >/dev/null; }
+
+# defaults (magick uses a placeholder)
+inplace= noop= gdate= datefmt='%Y%m%d_%H%M%S' exiftool=exiftool
+magick='?' overwrite= quality= recurse= size= verbose= ext= tz=
+
+while getopts 0f:hiq:rs:t:vVx:yz:-: OPT; do
+  if [ "$OPT" = - ]; then # --long: https://stackoverflow.com/a/28466267/519360
+    OPT="${OPTARG%%=*}"; OPTARG="${OPTARG#"$OPT"}"; OPTARG="${OPTARG#=}"
+  fi
+  case "$OPT" in
+    ( exiftool )	needs_arg; exiftool="$OPTARG" ;;
+    ( date )		needs_arg; gdate="$OPTARG" ;;
+    ( f | *format )	datefmt="$OPTARG" ;;
+    ( 0 | dry-run | test ) noop=echo ;;
+    ( h | help )	help ;;
+    ( i | in-place )	inplace=1 ;;
+    ( magick )		needs_arg; magick="$OPTARG" ;;
+    ( q | quality )	needs_arg; quality="$OPTARG" ;;
+    ( r | recur* )	recurse=1 ;;
+    ( s | *size )	needs_arg; size="$OPTARG" ;;
+    ( t | target )	needs_arg; target="$OPTARG" ;;
+    ( v | verbose )	verbose='-v' ;;
+    ( V | version )	version ;;
+    ( x | ext* )	needs_arg; ext="${OPTARG#.}" ;;
+    ( y | force )	overwrite=1 ;;
+    ( z | *zone )	needs_arg; tz="${OPTARG#UTC}" ;;
+    ( \? )		exit 2 ;;
+    ( * )		die "Illegal option --$OPT" ;;
+  esac
+done
+shift $((OPTIND-1))
+
+if [ -n "$gdate" ]; then
+  if ! we_have "$gdate"; then
+    die "Invalid date command \`$gdate\`"
+  elif "$gdate" -ud @0 >/dev/null 2>&1; then	# GNU and Busybox date
+    epoch() { "$gdate" -ud @"$@"; }
+  elif "$gdate" -ur 0 >/dev/null 2>&1; then	# BSD date
+    epoch() { "$gdate" -ur "$@"; }
+  else
+    die "Manually specified date program \`$gdate\` doesn't work"
+  fi
+elif date -ud @0 >/dev/null 2>&1; then	# GNU and Busybox date
+  epoch() { date -ud @"$@"; }
+elif we_have gdate && gdate -ud @0 >/dev/null 2>&1; then  # GNU date as gdate
+  epoch() { gdate -ud @"$@"; }
+elif date -ur 0 >/dev/null 2>&1; then	# BSD date
+  epoch() { date -ur "$@"; }
+elif we_have busybox && busybox date -ud @0 >/dev/null 2>&1; then
+  epoch() { busybox date -ud @"$@"; }
+else
+  die "Could not locate a variant of \`date\` supporting epoch time calculation"
+fi
+
+if ! we_have "$exiftool"; then
+  if [ "$exiftool" = exiftool ]; then
+    die "You need \`exiftool\` for this task"
+  else
+    die "Invalid path for exiftool \`$exiftool\`"
+  fi
+fi
+
+if ! epoch 0 +"$datefmt" >/dev/null 2>&1; then
+  die "Invalid date format \`$datefmt\`"
+fi
+
+if [ "$magick" = '?' ]; then
+  if we_have magick; then
+    magick=magick
+  else
+    for v in 9 8 7 6; do  # affording for updates; current version is 7 in 2025
+      if we_have "magick-im$v"; then magick="magick-im$v"; break 2; fi
+    done
+  fi
+  if [ "$magick" = '?' ]; then
+    die "You need \`magick\` or \`convert\` for this task"
+  fi
+elif ! we_have "$magick"; then
+  die "Invalid path for ImageMagick \`$magick\`"
+fi
+
+if ! [ 0 -le "${quality:-9}" -a "${quality:-9}" -le 100 ] 2>/dev/null; then
+  die "Invalid quality. Quality must be an integer between 0 and 100"
+fi
+
+if [ -n "$size" ]; then
+  if [ "$size" -gt 0 ] 2>/dev/null; then  # support a single dimension for size
+    size=${size}x$size
+  # else if not (width > 0 && height > 0) or two x's or invalid char
+  elif ! [ "${size%x*}" -gt 0 -a "${size#*x}" -gt 0 ] 2>/dev/null \
+  || [ "$size" != "${size#*x*x}" ] || [ "$size" != "${size#*[!0-9x]}" ]; then
+    die "Invalid WIDTHxHEIGHT geometry \`$size\`"
+  fi
+fi
+
+if [ -n "$target" ]; then
+  if [ -n "$inplace" ]; then
+    die "You cannot specify \`--in-place\` and \`--target\`"
+  elif ! [ -d "$target" ]; then
+    die "Target directory \`$target\` does not exist." "Please create it first."
+  elif ! [ -w "$target" ]; then
+    die "Cannot write to target directory \`$target\`"
+  fi
+fi
+
+if [ -n "$ext" ]; then
+  if ! "$magick" -list format |awk -v ext="$ext" -F '[* ]+' '
+    BEGIN { ext = toupper(ext) }
+    $2 == ext && $4 ~ /^[r-]w[+-]$/ { x=1; exit }
+    END { exit !x }
+  '; then
+    die "Unsupported extension \`$ext\`" \
+      "List supported extensions with \`$magick -list format\`"
+  fi
+fi
+
+: "tz=<$tz>"
+case "${tz#[+-]}" in
+  # two colons | invalid char | leading colon | trailing colon | too large
+  ( *:*:* | *[!0-9:]* | :* | *: | ??????* | ??[!:]?? | 2[5-9]??* | [3-9][!:]??*)
+    die "Invalid TZ offset \`$tz\`" ;;
+  ( *:* ) : "no-op: there is already a colon" ;;
+  ( ? | ?? )	tz="$tz:00" ;;
+  ( ??? )	tz="${tz%??}:${tz#??}" ;; # -400 -> -4:00, +530 -> +5:30
+  ( ???? )	tz="${tz%???}:${tz#???}" ;; # +1100 -> +11:00
+esac
+: "tz=<$tz>. Flip direction because it's somehow read backwards"
+# https://stackoverflow.com/q/26802201/519360#comment140275536_26802308
+case "$tz" in
+  ( -[0-9]* )	tz="+${tz#?}" ;;
+  ( [0-9]* )	tz="-$tz" ;;
+  ( +[0-9]* )	tz="-${tz#?}" ;;
+esac
+tz="UTC$tz"
+
+
+if [ $# = 0 ]; then
+  set -- *
+fi
+
+oldest() {
+  awk -F '[[:space:]]+: ' '
+    /^Profile/   { next }
+    /[Dd]ate.*@/ { print $2 }
+  ' |sort |head -n1
+}
+
+# ensure there's a trailing slash but don't add an extra
+target="${target%/}${target:+/}"
+
+action() {
+
+  file="$1"
+
+  case "$file" in
+    ( */?* )	dir="${file%/*}/"; file="${file#$dir/}" ;;
+    ( * )	dir="" ;;
+  esac
+
+  date=$(TZ="${tz:-$TZ}" "$exiftool" -d "%Y%m%d%H%M.%S@%s" "$dir$file" |oldest)
+  stamp=${date%@*}
+  if [ -n "$inplace" ]; then
+    outfile=$(mktemp)
+  elif [ -n "$datefmt" ]; then
+    : "date=<$date>"
+    outfile="$target$(epoch ${date##*@} +"$datefmt").$file"
+  else
+    outfile="$target$file"
+  fi
+
+  if [ -n "$ext" ]; then
+    outfile="${outfile%.*}.$ext"
+  fi
+
+  if [ -s "$outfile" ] && [ 1 != "$overwrite" ]; then
+    printf '%s: Overwrite existing `%s` [yNa]? ' "${0##*/}" "$outfile"
+    read YN
+    case "$YN" in
+      ( [Yy]* )	: "yes, overwrite" ;;
+      ( [Aa]* )	overwrite=1 ;;
+      ( * )	die "Aborted" ;;
+    esac
+  fi
+
+  if [ -n "$size" ]; then
+    dim=$("$magick" identify - < "$file" |awk '{ print $3; exit }')
+    [ "${dim%x*}" -gt "${size%x*}" -o "${dim#*x}" -gt "${size#*x}" ] 2>/dev/null
+    case $? in
+      ( 0 ) mysize="$size" ;;
+      ( 1 ) mysize= ;;
+      ( 2 ) die "Could not extrapolate size from \`$file\`" ;;
+    esac
+  fi
+
+  $noop "$magick" $verbose ${mysize:+-size} $mysize "$dir$file" \
+    ${mysize:+-resize} $mysize \
+    ${quality:+-quality} $quality "$outfile" \
+  && TZ="${tz:-$TZ}" $noop ${noop:+${tz:+TZ=$tz}} touch -t "$stamp" "$outfile"
+
+  if [ -n "$inplace" ] && [ -s "$outfile" ]; then
+    mv "$outfile" "$file"
+  fi
+
+}
+
+color= plain=
+if [ -z "$NO_COLOR" ] && [ "$-" != "${-#*i}" ] \
+&& [ -t 0 -o -n "$CLICOLOR_FORCE" ]; then
+  color="${GREP_COLORS:-ms=$GREP_COLOR}"
+  case "$color" in
+    ( *ms=[!\;]* )	color="${color#*ms=}"; color="${color%%:*}" ;;
+    ( * )		color="1;31" ;;
+  esac
+  color="[$color"m
+  plain="[m"
+fi
+
+total=0
+main() {
+  n=0 total=$((total + $#))
+  for arg in "$@"; do
+
+    if [ -d "$arg" ]; then
+      if [ 1 = "$recurse" ]; then
+        main "$arg"/*
+      else
+        if [ -n "$verbose" ] || [ "$n" -gt 1 ]; then echo ""; fi
+        echo "Skipping directory \`$arg\`" >&2
+      fi
+    else
+      n=$((n + 1))
+      progress=$(( (1000 * n / $total + 5) / 10 ))
+      progress="Exifname: $n / $total ($progress%) - $arg"
+      if [ "${TERM%[Ll]inux}" = "${TERM%dumb}" ]; then
+        printf "\033]0;%s\007" "$progress"
+      fi
+      if [ -n "$verbose" ] && [ "$n" -gt 1 ]; then echo ""; fi
+      printf '\r%s' "$color$progress$plain"
+      action "$arg"
+    fi
+
+  done
+}
+
+main "$@"
+retval=$?
+echo
+exit $retval
+
