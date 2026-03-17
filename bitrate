@@ -3,30 +3,40 @@
 help() { cat <</help
 Get bitrate stats on given media files (from mplayer)
 Usage: bitrate [OPTIONS] [FILE|DIR...]
-  -h, --help      Get help
-  -l, --long      Longer listing
-  -q, --quiet     Suppress title and summary
-  -V, --version   Get version
+  -a, --audio-only  Suppress video columns
+  -c, --condense    Shrink horizontally (default if viewport columns < 80)
+  -h, --help        Get help
+  -l, --long        Long listing (more columns, default if viewport width > 99)
+  -L, --short       Narrow listing (fewer columns, default if viewport < 100)
+  -q, --quiet       Suppress title and summary
+  -r, --recursive   Traverse recursively (does not follow symlinks)
+  -R                Traverse recursively (follow symlinks too)
+  -V, --version     Get version
 
 If given a directory as the sole argument, its contents will be examined.
 If given no arguments, all children of the current directory become arguments.
 Directory arguments are only parsed if they contain exactly ONE 160+M movie.
 
-Columns:
- Time         Up to Y:DD:HH:MM:SS     xSD   Pixel density multiplier vs. std def
- Audio/Video  Codec, # audio tracks         (width x height) / (640 x 480) 
- Seconds      The seconds             Qual  Quality:  MB/min / xSD x 10 x adj
- kbps         Kilobits per second           50 is good, 70 great, 100+ excellent
-              (overall, not video)    Size  File size
- MB/min       MegaBytes per minute    Name  File name
+COLUMNS (astersisked items are suppressed given --short or viewports < 100)
+ Time         Up to Y:DD:HH:MM:SS
+ Audio*       Codec, # audio tracks
+ Video*       Codec
+ Seconds*     Play time in seconds, to the tenths of seconds
+ kbps         Kilobits per second (overall)
+ MB/min       Megabytes (MiB) per minute
+ xSD*         Pixels per second vs. std def (W x H x FPS) / (640 x 480 x 23.976)
+ Dens         Density:  MB/min / xSD x 10 (tries to compensate for extra tracks)
+ Size         File size
+ Name         File name
 
-v0.3+20120118 Copyright 2010+ by Adam Katz, www.khopis.com/scripts, GPL2+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+bitrate 1.6.20260316.0 Copyright 2010+ by Adam Katz <@adamhotep>, GPLv2+
 /help
 }
 version() { help |sed '$!d'; }
 
 we_have() { type "$@" >/dev/null 2>&1; }
-die() { echo "$*" >&2; exit 2; }
+die() { printf '%s\n' "$@" >&2; exit 2; }
 
 if ! we_have mplayer; then
   if we_have mplayer2
@@ -40,38 +50,67 @@ is_media() {
     -e matroska -e mpeg -e quicktime -e mp4 -e h264 -e midi -e webm >/dev/null
 }
 
-LONG=0
+AUDIO_ONLY=0 LONG=0
+if ! [ "$COLUMNS" -gt 9 ] 2>/dev/null; then
+  COLUMNS="$(tput cols)"
+  export COLUMNS="${COLUMNS:-80}"
+fi
+if [ "$COLUMNS" -lt 80 ]; then
+  CONDENSE=1
+elif [ "$COLUMNS" -ge 100 ]; then
+  LONG=1
+fi
 
-while getopts lhqvV-: arg; do
-  case $arg in
-    h )    help; exit 0 ;;
-    [lv] ) LONG=1 ;;
-    q )    QUIET=1 ;;
-    V )    version; exit 0 ;;
-    - )    OA="${OPTARG#*=}"
-           case $OPTARG in
-             help* )		help; exit 0 ;;
-             long*|versi* )	LONG=1 ;;
-             quiet* )		QUIET=1 ;;
-             ver|vers* )	version; exit 0 ;;
-             * )		die "Illegal option --$OPTARG ... Try --help" ;;
-           esac ;;
-    \?)    die "Try --help" ;;
+while getopts acClLhqrRvV-: OPT; do
+  if [ "$OPT" = - ]; then  # --long, https://stackoverflow.com/a/28466267/519360
+    OPT="${OPTARG%%=*}" OPTARG="${OPTARG#"$OPT"}" OPTARG="${OPTARG#=}"
+  fi
+  case $OPT in
+    ( a | audio* )		AUDIO_ONLY=1 ;;
+    ( C | cond*=[Nn0]*|wide* )	CONDENSE=0 ;;
+    ( c | cond* )		CONDENSE=1 ;;
+    ( h | help* )		help; exit 0 ;;
+    ( l | long*=[Nn0]*|short )	LONG=0 ;;
+    ( L | long*|verb* )		LONG=1 ;;
+    ( q | quiet* )		QUIET=1 ;;
+    ( r | deref*rec*|rec*lin* )	RECURSIVE=2 ;;
+    ( R | recur* )		RECURSIVE=1 ;;
+    ( v | verb* )		LONG=1 VERBOSE=1 ;;
+    ( V | ver* )		version; exit 0 ;;
+    ( \? )			die "Try --help" ;;
+    ( * )			die "Illegal option --$OPT" "Try --help" ;;
   esac
 done
 shift $((OPTIND-1))
+
+if [ 1 = "$CONDENSE" ]; then
+  if ! we_have columns; then columns() { column -t; }; fi
+  if ! we_have trunc; then
+    trunc() { awk -v cols="${COLUMNS:-80}" '{ print substr($0, 1, cols) }'; }
+  fi
+  out() { columns -s |trunc; }
+else
+  out() { cat; }
+fi
 
 details_loop() {
   total_time=0
   total_size=0
   #total_pix=0
 
-  title="Seconds^Time^Size^Name^kbps^MB/min^Audio^Video^xSD^Qual"
+  #         1      2   3     4    5    6      7     8    9   10
+  title="Seconds^Time^Size^Name^kbps^MB/min^Audio^Video^xSD^Dens"
 
   for movie in "$@"; do
     # directory - only include if it contains ONE 160+ MB file
     if [ -d "$movie" ]; then
-      movie=`find "$movie" -size +160M`
+      if [ 1 = "$VERBOSE" ]; then
+        movie="$(find "$movie" -size +160M)"
+      elif ! [ -r "$movie" ]; then
+        continue
+      else
+        movie="$(find "$movie" -size +160M 2>/dev/null)"
+      fi
       if ! [ -s "$movie" ]; then continue; fi
     fi
     if ! [ -e "$movie" ]; then # doesn't exist: steal error from 'file'
@@ -80,31 +119,41 @@ details_loop() {
     fi
 
     unset ID_AUDIO_CODEC ID_VIDEO_CODEC ID_LENGTH \
-          ID_VIDEO_WIDTH ID_VIDEO_HEIGHT
+          ID_VIDEO_WIDTH ID_VIDEO_HEIGHT ID_VIDEO_FPS
     eval $(mplayer -vo null -ao null -forceidx -frames 0 -identify "$movie" \
             2>/dev/null |sed '/^ID_/!d; s/[]()|&;<>`'"'"'\\!$" []/\\&/g')
 
     audio="${ID_AUDIO_CODEC:-none}"
     video="${ID_VIDEO_CODEC:-none}"
+    fps="$ID_VIDEO_FPS"
     audio="${audio#ff}"
     audio="${audio%float}"
     video="${video#ff}"
 
     time="${ID_LENGTH:-0}"
-    tc=`echo |awk '{ printf "%.0f",'"$time"' }'` # round time to integer
+    tc="$(printf "%.0f" "$time")"	# round time to an integer
     if ! [ "$tc" -gt 0 ] 2>/dev/null; then
       is_media "$movie" || continue
     fi
-    size=`du -sk "$movie" |awk '{print $1}'`
+    size="$(du -skL "$movie" |awk '{print $1}')"
 
     if [ -n "$LONG" ]; then
 
       if [ "$((tc*ID_VIDEO_WIDTH*ID_VIDEO_HEIGHT))" -gt 0 ] 2>/dev/null; then
-        pix=`echo |awk '{ printf "%.2f", '"
-              $ID_VIDEO_WIDTH * $ID_VIDEO_HEIGHT / (640 * 480)
-            }"`
-        else pix=0
+        if ! [ "${fps%%.*}" -gt 0 -o "${fps##*.}" -ge 0 ] 2>/dev/null; then
+          fps=23.976 # assumption for invalid rate (24/1.001 is too precise)
+        elif [ "$fps" = "59.940"  ]; then
+          fps=25 # Handbrake's "Peak Framerate (VFR)" results in "59.940fps"
+        elif [ "${fps%%.*}" -ge 31 ]; then
+          fps=31 # limit just how much "better" this makes things
+        fi
+        pix="$(awk -v w="$ID_VIDEO_WIDTH" -v h="$ID_VIDEO_HEIGHT" -v f="$fps" '
+          BEGIN { printf "%.2f", w * h * f / (640 * 480 * 23.976) }'
+        )"
+      else
+        pix=0
       fi
+      #echo "pix=$pix" >&2
       #total_pix=$((total_pix+${pix%%.*}))
 
       if [ -z "$total_audio" ]
@@ -119,10 +168,15 @@ details_loop() {
       fi
 
       if [ "$movie" != "${movie%.[Mm][Kk][Vv]}" ] && we_have mkvinfo; then
-        tracks=`mkvinfo "$movie" 2>/dev/null |grep -c "Audio track"`
-        if [ $tracks -gt 1 ]; then
-          audio="$tracks@$audio"
-        fi
+        # echos either nothing (no extra tracks) or "N@" where N is track count
+        # Usage: count_tracks Audio|Video       CASE MATTERS HERE
+        count_tracks() {
+          local tracks
+          tracks="$(mkvinfo "$movie" 2>/dev/null |grep -c "$1 track")"
+          if [ $tracks -gt 1 ]; then echo "$tracks@"; fi
+        }
+        audio="$(count_tracks Audio)$audio"
+        video="$(count_tracks Video)$video"
       fi
 
     fi
@@ -133,23 +187,44 @@ details_loop() {
     if [ "$tc" = 0 ] && [ "$size" -gt 62 ]
       then tc="?"
       elif we_have timecalc
-        then tc=`timecalc $tc`
+        then tc="$(timecalc $tc)"
     fi
     if [ -n "$title" ] && [ -z "$QUIET" ]; then echo "$title"; unset title; fi
+    #       1    2    3      4   5 6    7      8     9
     echo "$time^$tc^$size^$movie^0^0^$audio^$video^$pix"
   done
 
   # print a summary if there was more than one file
   if [ "$total_size" -gt "${size:-1}" ] && [ -z "$QUIET" ]; then
-    we_have timecalc && tc=`timecalc $total_time` || tc="$total_time"
+    we_have timecalc && tc="$(timecalc $total_time)" || tc="$total_time"
     #echo "$total_time^$tc^$total_size^(overall)^ ^ ^ ^ ^$total_pix"
+    #          1       2      3          4      5 6       7            8
     echo "$total_time^$tc^$total_size^(overall)^ ^ ^$total_audio^$total_video^-"
   fi
 }
 
 [ $# = 1 ] && [ -d "$1" ] && cd "$1" && shift
 [ $# = 0 ] && set -- *
-details_loop "$@" |awk -F^ '
+if [ -n "$RECURSIVE" ]; then
+  if [ 2 = "$RECURSIVE" ]; then LINKS="-L"; fi
+  # 13 line workaround for inabiltiy to run `find ... -print0 |xargs -0 set --`
+  # (yes, if we tracked options better, this could just be a recursive call
+  # rather than using `set --` but this seems preferable at the moment)
+  TMP="$(mktemp)"
+  trap "rm -f $TMP" 0
+  find $LINKS "$@" -type f > $TMP
+  START=1
+  while IFS= read -r LINE; do
+    if [ 1 = "$START" ]; then
+      unset START
+      set --
+    fi
+    set -- "$@" "$LINE"
+  done < $TMP
+  rm -f $TMP
+  trap - 0
+fi
+details_loop "$@" |awk -F^ -v LONG="$LONG" -v AUDIO_ONLY="$AUDIO_ONLY" '
  BEGIN { retval = 1; }
  function squish(num) {
    if (num >= 100) {
@@ -166,64 +241,78 @@ details_loop "$@" |awk -F^ '
  $3 > 10 && $2 != "Time" {
    for ( i=1; i<=NF; i++) { $i == " " && $i = ""; }
 
+   ifdensity = $6;
+
    if ( $1 == 0 ) {
      $5 = "?";
-     $6 = $5;
+     ifdensity = $5;
    } else {
      $5 = sprintf("%d", $3*8/$1);
-     $6 = squish($3*60/1024/$1);
+     ifdensity = $3 * 60 / 1024 / $1;
    }
+   $6 = squish(ifdensity);
 
    $10 = "-";
    if ($9 > 0) {
-     rate = $6;
+     density = ifdensity;
+
+     # AUDIO - facilitate multiple tracks
+     # raw/true track info:   mkvinfo -t movie.mkv |tail
      tracks = $7;
      gsub(/@.*/,"",tracks);
-     if (tracks) {
+     if (tracks*1 > 1) {
        tracks--;
-       rate -= tracks * 64 * 60/8/1024; # ASSUME extra audio tracks are 64kbps
+       density -= tracks * 64 * 60/8/1024; # ASSUME extra audio tracks @ 64kbps
      }
-     if ($7 ~ /ac3/) { rate -= 224 * 60/8/1024; } # assume AC3=384kbps, std=160
+     # assume AC3=384kbps, others=128
+     if ($7 ~ /ac3/) { density -= 256 * 60/8/1024; }
+     if ($7 ~ /none/) { density += 128 * 60/8/1024; }
 
-     # Assumptions about quality differences between codecs,
-     # last updated from http://keyj.emphy.de/video-encoder-comparison/
-     # (using SSIM graph at 1000kbps, eval dated 2010-02), see also
-     #http://www2.tkn.tu-berlin.de/research/evalvid/EvalVid/vp8_versus_x264.html
+     # VIDEO - facilitate multiple tracks (cycle through them in mplayer with _)
+     tracks = $8;
+     gsub(/@.*/,"",tracks);
+     if (tracks*1 > 1) {
+       # ASSUME remaining audio is 128kbps, ASSUME all video tracks are equal
+       assumed_audio_base = 128 * 60/8/1024;
+       density = (density - assumed_audio_base) / tracks + assumed_audio_base;
+     }
 
-     # codec quality at xSD 0.875 converges between 1500 and 2000 kbps
-     if (rate / $9 < 1500 * 60/8/1024 / 0.875) { # equiv: (rate * 10 / $9 < 126)
-       vid = tolower($8); # cannot do /foo/i
-       if          (vid ~ /h264/) {	rate *= .982; # assuming high
-       } else { if (vid ~ /vp8|webm/) {	rate *= .976; # assuming == x264.base
-       } else { if (vid ~ /xvid/) {	rate *= .974;
-       } else { if (vid ~ /divx/) {	rate *= .972; # theora < divx < xvid
-       } else { if (vid ~ /theora/) {	rate *= .971;
-       } else { if (vid ~ /mpeg2/) {	rate *= .965;
-       } else { if (vid ~ /dirac/) {	rate *= .949;
-       } else { 			rate *= .97;
-     } } } } } } } }
-     $10 = sprintf("%.0f", rate*10/$9);
+     $10 = sprintf("%.0f", density*10/$9);
    }
    $9 = squish($9);
 
-   if ( $3 > 1024^3 ) {
-     $3 = sprintf("%4.2fT", $3/1024^3);
-   } else { if ( $3 > 1024^2 ) {
-     $3 = sprintf("%4.2fG", $3/1024^2);
-   } else { if ( $3 > 1024 ) {
-     $3 = sprintf("%4.2fM", $3/1024);
-   } else {
-     $3 = sprintf("%4.2fk", $3);
-   } } }
+   # human readable, accounting for rounding up, starting with Terabyte level
+   if ( $3 >= 99.95 * 1024^3 ) { $3 = sprintf("%4.0fT", $3/1024^3);
+   } else if ( $3 >= 9.995 * 1024^3 ) { $3 = sprintf("%4.1fT", $3/1024^3);
+   } else if ( $3 >= 1023.5 * 1024^2 ) { $3 = sprintf("%4.2fT", $3/1024^3);
+   # Gigabyte level
+   } else if ( $3 >= 99.95 * 1024^2 ) { $3 = sprintf("%4.0fG", $3/1024^2);
+   } else if ( $3 >= 9.995 * 1024^2 ) { $3 = sprintf("%4.1fG", $3/1024^2);
+   } else if ( $3 >= 1023.5 * 1024 ) { $3 = sprintf("%4.2fG", $3/1024^2);
+   # Megabyte level
+   } else if ( $3 >= 99.95 * 1024 ) { $3 = sprintf("%4.0fM", $3/1024);
+   } else if ( $3 >= 9.995 * 1024 ) { $3 = sprintf("%4.1fM", $3/1024);
+   } else if ( $3 >= 1023.5 ) { $3 = sprintf("%4.2fM", $3/1024);
+   # Kilobyte level
+   } else { $3 = sprintf("%4.0fk", $3);
+   }
 
    $1 = sprintf("%5.1f", $1);
    retval = 0;
  }
  {
-   if ( '$LONG' ) {
-     printf "%9s%7s%7s%8s%5s%7s%6s%5s%9s  %s\n", $2,$7,$8,$1,$5,$6,$9,$10,$3,$4;
+   if (AUDIO_ONLY) {
+     if (LONG) {
+       printf "%9s %8s %7s %5s %6s %7s  %s\n", $2,$7,$1,$5,$6,$3,$4;
+     } else {
+       printf "%9s %5s %6s %7s  %s\n", $2,$5,$6,$3,$4;
+     }
+   } else if (LONG) {
+     printf "%9s %8s %6s %7s %5s %6s %5s %4s %7s  %s\n", \
+       $2,$7,$8,$1,$5,$6,$9,$10,$3,$4;
    } else {
-     printf "%9s%5s%7s%5s%9s  %s\n", $2,$5,$6,$10,$3,$4;
+     printf "%9s %5s %6s %4s %7s  %s\n", $2,$5,$6,$10,$3,$4;
    }
- } END { exit retval; }'
+ } END { exit retval; } # retval is rendered useless by the next line :-/
+' |out
 
