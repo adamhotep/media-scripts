@@ -1,0 +1,219 @@
+#!/bin/sh
+help() { cat <</help
+Extract Motion Photo from filename.MP.jpg and save it to filename.mp4
+Usage: jpg2mp4 [OPTIONS] MOTION_PHOTO [VIDEO] [MOTION_PHOTO [VIDEO]...]
+
+  -f, --find            Find the MP4 offset directly rather than using EXIF data
+  -j, --jpeg            Save the image without the motion photo
+  -l, --list            Output the list of converted videos' paths, which allows
+                        e.g. \`jpg2mp4 a.MP.jpg b.MP.jpg |xargs mpv\`
+  -p, --play[=PLAYER]   Play (do not save) the first photo's video
+  -q, --quiet           Say less in the output (suppresses warnings)
+  -s, --sanitize        Sanitize final mp4 output (default)
+  -S, --sanitize=no     Do not sanitize the final mp4 output (faster)
+  -t, --target=DIR      Place output VIDEOs in DIR unless they contain paths
+  -v, --verbose         Say more in the output
+  -x, --extension=TEXT  Strip this before appending $extm (default=\`$extj\`)
+                        (Overridden when VIDEO is specified afet a MOTION_PHOTO
+  -Z, -0, --null        As \`-l\` but null-delimit the list (for \`xargs -0\`)
+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+jpg2mp4 0.3.20240820.0 copyright 2022+ by Adam Katz, GPLv2+
+/help
+}
+
+tmp_list=
+mktemp() {
+  local file="${TMPDIR:-/tmp}/jpg2mp4-$$." i=0 f
+  f="$(command mktemp "${file}XXXXX" 2>/dev/null)"
+  if ! [ -f "$f" ]; then
+    while [ -e "$file$i" ] || ! touch "$file$i" 2>/dev/null; do i=$((i+1)); done
+    f="$file$i"
+    chmod go-rwx "$f"
+  fi
+  tmp_list="$tmp_list $f"
+  echo "$f"
+}
+purge() {
+  if [ -s "$tmp_list" ]; then
+    xargs rm -f < "$tmp_list"
+    rm "$tmp_list"
+  fi
+}
+trap purge 0 1 2 15
+
+we_have() { command -v "$@" >/dev/null; }	# true when we have the command
+warn() { echo "$*" >&2; }		# complain to STDERR
+die() { echo "$*" >&2; exit 2; }	# complain to STDERR and exit with error
+needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
+
+# Defaults
+extj='.MP.jpg'
+extm='.mp4'
+jpeg=0
+list=
+retval=1
+sanitize=1
+target=
+verbose=1
+
+while getopts 0fhjlpqsSt:vVx:z@:-: OPT; do
+  if [ "$OPT" = - ]; then # --option https://stackoverflow.com/a/28466267/519360
+    OPT="${OPTARG%%=*}" OPTARG="${OPTARG#"$OPT"}" OPTARG="${OPTARG#=}"
+  fi
+  case "$OPT" in
+    ( f | find )	find=1 ;;
+    ( h | help )	help; exit ;;
+    ( j | jpg | jpeg )	jpeg=1 ;;
+    ( l | list )	list=1 ;;
+    ( p | @ | play )	play="${OPTARG:-/}" ;;
+    ( q | quiet )	verbose=$((verbose-1)) ;;
+    ( s | sanitize )	sanitize="${OPTARG:-1}" ;;	# support --sanitize=no
+    ( S | no-sanitize )	sanitize=0 ;;
+    ( t | target )	needs_arg; target="$OPTARG" ;;
+    ( usage )		help |awk '$1 == "Usage:"'; exit ;;
+    ( V | version )	help |tail -n1; exit ;;
+    ( v | verbose )	verbose=$((verbose+1)) ;;
+    ( x | extj* )	extj="$OPTARG" ;;	# yes, this can be empty
+    ( z | 0 | null )	list=1 null=1 ;;
+    ( \? )		exit 2 ;;  # bad short option (error handled by getopts)
+    ( * )		die "Illegal option --$OPT" ;;  # bad long option
+  esac
+done
+shift $((OPTIND-1))
+
+run() { "$@"; }
+qrun() { "$@" >/dev/null 2>&1; }	# run quietly
+
+case $verbose in
+  ( 0 | -* ) v= fflog=$((8*verbose))	# -q -> 0 = panic, -qq -> -8 = quiet
+  	run() { qrun "$@"; }
+  	warn() { false; }
+  	;;
+  ( 1 ) v= fflog='fatal' ;;	# fatal = 8 (ffmpeg default is info = 32)
+  ( 2 ) v=-v fflog='verbose'		# -v -> verbose = 40
+  	run() { warn "running $*"; "$@"; }
+  	qrun() { run "$@"; }
+  	;;
+  ( * ) v=-v fflog=$((24+8*verbose))	# -vv -> 48 = debug, -vvv -> 56 = trace
+  	set -x	# xtrace; all commands are shown, including `:` comments
+  	;;
+esac
+
+# based on answers at https://stackoverflow.com/q/53104989/519360
+if we_have exiftool && [ "$find" != 1 ]; then
+  offset() {
+    exiftool -MPImageStart -MPImageLength -S "$@" |awk '
+      { b += $2 }
+      END { if (NR == 2) print b; else exit 1 }
+    ' || die "No MP image offsets detected. Try \`${0##*/} --find ...\` instead"
+  }
+elif we_have perl; then
+  offset() {
+    perl -0777ne '/\A(.+?)\0\0\0\x1cftyp(?:iso\w|mp4)/s && print length $1' "$@"
+  }
+else
+  offset() {
+    # unreliable on Mac/non-GNU/old; https://stackoverflow.com/a/53573465/519360
+    grep -Pabo '\0\0\0\x1cftyp(?:iso\w|mp4)' "$@" |awk -F: '{ print $1 }'
+  }
+fi
+
+if [ -n "$list" ]; then
+  : "build and later report a list of converted videos"
+  list="$(mktemp)"
+  if [ -n "$null" ]; then
+    add_list() {
+      awk -v list="$list" -v str="$1" 'BEGIN { printf "%s%c", str, 0 >> list }'
+    }
+  else
+    add_list() { echo "$1" >> "$list"; }
+  fi
+else
+  add_list() { false; }
+fi
+
+sanitize() { : "sanitizing is disabled"; }
+
+if [ "$sanitize" = "${sanitiz#[0Nn]}" ]; then
+  : "sanitizing is enabled"
+  if we_have ffmpeg; then
+    cleaned="$(mktemp)"
+    sanitize() {
+      ffmpeg -loglevel $fflog -y -i "$1" -map 0:V:0 -c copy "$cleaned"
+      local ret=$?
+      if [ $ret = 0 ] && [ -s "$cleaned" ]; then
+        mv $v "$cleaned" "$1"
+      else
+        rm $v "$cleaned"
+        return $ret
+      fi
+    }
+  else
+    warn "Cannot sanitize without ffmpeg. Setting \`--sanitize=no\`..."
+  fi
+fi
+
+main() {
+  mp_jpg="$1"
+  mp4="${2:-${mp_jpg%$extj}$extm}"  # file.MP.jpg -> file.mp4 or file.jpg.mp4
+  if [ -d "$target" ] && [ "$mp4" != "${mp4#*/?}" ]; then
+    mp4="$target/${mp4##*/}"
+  fi
+  if [ -s "$mp4" ]; then
+    warn "Skipping '$mp_jpg' -> '$mp4' since target exists"
+    return
+  fi
+  i="$(offset "$mp_jpg")"
+  if [ ${i:=0} -gt 0 ] && qrun dd if="$mp_jpg" of="$mp4" bs=$i skip=1; then
+    retval=0	# at least one extraction worked
+    touch --reference="$mp_jpg" "$mp4"
+    add_list "$mp4"
+    if [ "$jpeg" = 1 ]; then
+      out_jpg="${mp4%$extm}.jpeg"
+      if [ "$out_jpg" = "$mp_jpg" ]; then out_jpg="${mp4%$extm}.still.jpeg"; fi
+      if [ -s "$out_jpg" ]; then
+        warn "Skipping '$mp_jpg' -> '$out_jpg' since target exists"
+      else
+        qrun dd if="$mp_jpg" of="$out_jpg" bs=$i count=1 \
+          && touch --reference="$mp_jpg" "$out_jpg"
+      fi
+    fi
+  else
+    warn "No motion photo found in '$mp_jpg'"
+  fi
+  sanitize "$mp4"
+}
+
+if [ -n "$play" ]; then
+  if [ "$play" = / ]; then play=''; fi	# default player
+  if [ -n "$play" ] && ! we_have "$play"; then
+    warn "ERROR: Could not use given player '$play', trying defaults..."
+  fi
+  for player in "$play" mpv vlc mplayer; do
+    if we_have "$player"; then break; fi
+  done
+  out="$(mktemp)"
+  main "$1" "$out"
+  # play in the background while we process the rest
+  run "$player" "$out" &
+  shift
+fi
+
+while [ -s "$1" ]; do
+  if [ -n "$2" ] && [ ! -e "$2" -o ! -s "$2" ]; then
+    main "$1" "$2"
+    last="$2"
+    shift 2
+  else
+    main "$1"
+    shift
+  fi
+done
+
+if [ -s "$list" ]; then
+  cat "$list"
+fi
+
+wait	# wait for the player to end (if relevant)
+exit "$retval"
