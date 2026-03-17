@@ -1,0 +1,158 @@
+#!/bin/sh
+help() { cat <</help
+Dump images (if any) from given VCARD data to files in the current directory.
+Usage: vcf2img [--update] [FILE...]
+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+vcf2img 0.1.20240608.0 Copyright 2024+ by Adam Katz, GPLv2+
+/help
+}
+
+if [ "$1" = -h ] || [ "$1" = --help ]; then
+  help
+  exit
+elif [ "$#$1" = 2--encode ]; then	# (this is for internal handling)
+  fn="${2%.b64}"	# strip off trailing .b64 (if present)
+  fn="${fn%.*}" 	# strip off next extension (just one)
+  # find the newest file in the new/ subdirectory matching the given name
+  fn="$(find "new" -maxdepth 1 -name "$fn.*" -type f -size +1 -print0 \
+          |xargs -0 ls -td1 |head -n1)"
+  [ -f "$fn" ] || exit
+  exec base64 -w0 "$fn"
+  exit $?
+elif [ "$1" = --update ]; then
+  update=1
+  shift
+else
+  update=0
+fi
+
+# Bad assumptions that this script makes include:
+# * the FN value is always provided before the PHOTO value
+# * there is always an FN value; "unnamed contact photo NUMBER" is the fallback
+# * You're not on FAT32 or NTFS; we don't prune these four characters:  ? " < >
+
+awk -v vcf2img="$0" -v update=$update -v q="'" -v RS='\r?\n' '
+  FNR == 1 && update {
+    outfile = FILENAME
+    if (outfile == "-") outfile = "contacts"
+    else sub (/\.vcf$/, "", outfile)
+    outfile = outfile "-new.vcf"
+    printf "" > outfile
+  }
+  /^FN:/ {
+    gsub(/\r/, "")
+    fn = substr($0, 4)
+    gsub(/"/, q q, fn)		# doublequotes -> 2 apostrophes (for later)
+    gsub(/[:\/\\*|]+/, "_", fn)	# prune characters filesystems struggle with
+    gsub(/^\.+/, "", fn)	# no leading dots
+    ext = ".jpg.b64"
+  }
+  /^PHOTO[;:]/ {
+    photo_count++
+    if (!fn) fn = "unnamed contact photo " photo_count
+    backup_photo = $0
+    if (i = match($0, /ENCODING=B:/)) {  # not in the spec, but it is what I see
+      if (update) { preamble = substr($0, 1, i + RLENGTH - 1) }
+      $0 = substr($0, i + RLENGTH)
+    } else if (i = match($0, /https?:\/\/[^[:space:]]+/)) {
+      ext = ".url"
+      if (update) { preamble = substr($0, 1, i -1) }
+      $0 = substr($0, i)
+    } else if (i = match($0, /(data:|TYPE=)image\/[^;:]+/)) {
+      ext = substr($0, i + 11, RLENGTH - 12) ".b64"
+      if (update) { preamble = $0; gsub(/,[^,]*$/, ",", preamble) }
+      gsub(/.*base64,/, "")
+    } else {
+      print "Unknown photo format for <" fn ">:" > "/dev/stderr"
+      print $0
+    }
+    photo = $0
+    next
+  }
+  photo || $1 == "END:VCARD" {
+    if (photo && /^[[:space:]]/) {
+      photo = photo $1
+      backup_photo = backup_photo ORS $0
+      next
+    }
+    else {
+      if (!ext) ext = ".jpg.b64"
+      fn = fn ext
+      if (photo) {
+        print photo > fn
+        success++
+      }
+
+      if (update) {
+        if (preamble == "") preamble = "PHOTO;ENCODING=B:"
+        cmd = sprintf("%c%s%c --encode %c%s%c", 34, vcf2img, 34,   34, fn, 34)
+        base64 = ""
+        cmd | getline base64
+        if (base64) {
+          base64 = preamble base64
+          # sneak an extra character onto the first line
+          s = substr(base64, 1, 1)
+          i = 2
+          while (o = substr(base64, i, 73)) {
+            print s o >> outfile
+            s = " "
+            i += 73
+          }
+        } else if (backup_photo) {
+          print backup_photo >> outfile
+        }
+      }
+
+      fn = ext = photo = backup_photo = preamble = ""
+    }
+  }
+  update && NF {
+    print >> outfile
+  }
+  END {
+    exit !success
+  }
+' "$@" || { echo "No photos found."; exit 1; }
+
+if command -v pv >/dev/null; then
+  pv=1
+fi
+
+convert() {
+  n=1
+  for b in "$@"; do
+    out="${b%.b64}"
+    if base64 -id < "$b" > "$out"; then
+      rm "$b"
+      if [ "$out" = "${out%.jpg}" ]; then # verify this isn't a PNG
+        if file - < "$out" |grep -qFw 'PNG image'; then
+          mv -i "$out" "${out%jpg}png"
+        fi
+      fi
+    else
+      echo "Failed to decode $b" >&2
+    fi
+
+    if [ 1 = "$pv" ]; then
+      echo .
+    else
+      percent=$((10000 * $n / $# + 5))		# 100ths of 100ths (+5)
+      percent=${percent%?}			# 10ths of 100ths (rounded)
+      thousandths=${percent%?}
+      thousandths=${percent#$thousandths}	# just the 1000ths
+      percent=${percent%?}.$thousandths
+      printf "\r%d/%d (%.1f%%)" $n $# $percent
+      n=$((n+1))
+    fi
+  done
+  if [ "$pv" != 1 ]; then echo; fi
+}
+
+set -- *.b64
+if [ 1 = "$pv" ]; then
+  convert "$@" |pv -ls $# >/dev/null
+else
+  convert "$@"
+fi
+

@@ -1,0 +1,158 @@
+#!/bin/sh
+usage="Usage: ${0##*/} [OPTIONS] [FILE]"
+
+help() {
+  install="$(homify "${install:-$def_install}")"
+  cat <</help
+Copy images to the clipboard, a wrapper around xclip
+$usage
+  -d, --display=DISPLAY   Use this \$DISPLAY rather than \`$DISPLAY\`
+  --install[=WHERE]       Install a .desktop file, currently:
+                          \`$install\`
+  -s, --selection=TARGET  Copy to: \`primary\`, \`secondary\`, or \`clipboard\`,
+                          currently \`$selection\`
+  -t, --type=TYPE         Use this file type instead of auto-detecting it
+  -x, --executable=PATH   Alternate path for xclip, currently \`$xclip\`
+
+/help
+  version
+}
+
+version() {
+  echo "A part of media-scripts, https://github.com/adamhotep/media-scripts"
+  echo "img2clipboard 0.1.20200722.1 copyright 2020+ by Adam Katz, GPLv2+"
+  exit
+}
+
+# shorten the home to ~ for display purposes
+homify() {
+  local h="${1#$HOME}"
+  if [ "$h" != "$1" ]; then echo "~$h"; else echo "$1"; fi
+}
+
+die() { if [ "$#" -gt 0 ]; then printf '%s\n' "$@" >&2; fi; exit 2; }
+
+# Usage: choose QUESTION [DEFAULT [EXCUSE FOR ABORTING]]
+# Prompt the user with QUESTION, true when the answer is "yes"
+choose() {
+  local ans
+  while printf %s "${1:-Yes or no?} "; do
+    read ans
+    case "$2:$ans" in	# default:answer
+      ( [nN]: | *:*[nN]* )	die "Aborted${3:+ $3}" ;;	# "no"
+      ( [yY]: | *:*[yY]* )	return 0 ;;			# "yes"
+    esac
+    echo "You want either 'y' or 'n' ${2+(default='$2') }but I got '$ans'" >&2
+  done
+}
+
+install() {
+  local parent="${install%/*}"
+  if [ "$install" = "${install%.desktop}" ]; then
+    echo "WARNING: Given install path does not end in '.desktop'"
+    choose "Continue? [yN]" n
+  fi
+  if [ -s "$install" ]; then
+    choose "Overwrite existing '$(homify "$install")'? [yN]" n
+  elif ! [ -d "$parent" ]; then
+    choose "Create missing directory '$(homify "$parent")'? [yN]" n
+    mkdir -p "$parent" || exit $?
+  fi
+  cat <</install > "$install"
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Image to Clipboard
+Categories=Graphics
+Icon=edit-paste
+Exec=$0 %f
+/install
+  exit
+}
+
+# A little bit of pain is needed to support xclip-style single-dash long options
+# Usage: arg SHORT_OPTION LONG_SUFFIX DEFAULT_VALUE "$@"
+# Example: `arg d isplay '' "$@"` will allow any of:
+# `-d:0`  `-d :0`  `-display :0`  `--display :0`  `-display=:0`  `--display=:0`
+arg() {
+  local short="$1" long="$2" default="$3" out= inc=0
+  shift 3
+  case "$OPT:$OPTARG" in
+    ( "$short:$long" | *: )	eval out='"$'$OPTIND'"'; inc=1 ;;
+    ( "$short:$long"=* )	out="${OPTARG#$long=}" ;;
+    ( * )			out="$OPTARG" ;;
+  esac
+  # we pulled in the next option/argument ($out) but it starts with a dash: undo
+  if [ "$inc" = 1 ] && [ "$out" != "${out#-}" ]; then
+    out="$default" inc=0
+  fi
+  if [ -z "$out$default" ]; then
+    die "No arg for -$short/--$short$long option"
+  fi
+  echo "$out"
+  return $inc	# OPTIND cannot be changed here. trigger it with a return code.
+}
+
+# defaults
+DISPLAY="${DISPLAY:-:0}"
+def_install="$HOME/.config/geeqie/applications/image-to-clipboard.desktop"
+selection="clipboard"
+xclip="xclip"
+
+while getopts d:hi:s:t:x:V-: OPT; do
+  if [ "$OPT" = - ]; then  # --long: https://stackoverflow.com/a/28466267/519360
+    OPT="${OPTARG%%=*}" OPTARG="${OPTARG#"$OPT"}" OPTARG="${OPTARG#=}"
+  fi
+  case "$OPT" in
+    ( d | display )	DISPLAY=$(arg d isplay '' "$@") || inc=1 ;;
+    ( h | help )	help ;;
+    ( i | install )	install=$(arg i nstall "$def_install" "$@") || inc=1 ;;
+    ( s | sel* )	selection=$(arg s election '' "$@") || inc=1 ;;
+    ( t | target )	target=$(arg t arget '' "$@") || inc=1 ;;
+    ( V | ver | vers* )	version ;;
+    ( x | ex* | xclip )	xclip=$(arg x clip '' "$@") || inc=1 ;;
+    ( \? )		die ;;
+    ( * )		die "Illegal option --$OPT" "$usage" ;;
+  esac
+  if [ "$inc" = 1 ]; then OPTIND=$((OPTIND + 1)); fi
+  inc=
+done
+shift $((OPTIND - 1))
+
+if [ ! -x "$xclip" ]; then
+  xclip="$(command -v "$xclip" 2>/dev/null || echo "$xclip")"
+fi
+if [ ! -x "$xclip" ]; then
+  msg="Couldn't find command '$xclip'."
+  for try in apt apt-get yum pacman; do
+    if command -v "$try" >/dev/null 2>&1; then
+      sudo=''
+      if command -v sudo >/dev/null 2>&1 && ! [ -x / ]; then sudo='sudo '; fi
+      die "$msg try \`$sudo$try install xclip\` or so"
+    fi
+  done
+  die "$msg Try installing xclip"
+fi
+
+if [ -n "$install" ]; then
+  install
+fi
+
+if [ $# -gt 1 ]; then
+  die "${0##*/}: Too many inputs" "$usage"
+fi
+
+# Accept standard input if needed (slurp it into a temporary file)
+if [ $# = 0 ] && [ -t 0 ] || [ "$*" = /dev/stdin ] || [ "$*" = - ]; then
+  tmp="$(mktemp)"
+  trap "rm -f $tmp" 0 1 2 5 9 11 15 18
+  cat >$tmp
+  set -- $tmp
+fi
+
+# default target: use MIME type
+if [ -z "$target" ]; then
+  target="$(file -b -L --mime-type "$1")"
+fi
+
+"$xclip" -selection "$selection" -t "$target" -i "$@"
