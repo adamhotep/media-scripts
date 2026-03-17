@@ -1,0 +1,229 @@
+#!/bin/sh
+
+help() { cat <</help
+Get bitrate stats on given media files (from mplayer)
+Usage: bitrate [OPTIONS] [FILE|DIR...]
+  -h, --help      Get help
+  -l, --long      Longer listing
+  -q, --quiet     Suppress title and summary
+  -V, --version   Get version
+
+If given a directory as the sole argument, its contents will be examined.
+If given no arguments, all children of the current directory become arguments.
+Directory arguments are only parsed if they contain exactly ONE 160+M movie.
+
+Columns:
+ Time         Up to Y:DD:HH:MM:SS     xSD   Pixel density multiplier vs. std def
+ Audio/Video  Codec, # audio tracks         (width x height) / (640 x 480) 
+ Seconds      The seconds             Qual  Quality:  MB/min / xSD x 10 x adj
+ kbps         Kilobits per second           50 is good, 70 great, 100+ excellent
+              (overall, not video)    Size  File size
+ MB/min       MegaBytes per minute    Name  File name
+
+v0.3+20120118 Copyright 2010+ by Adam Katz, www.khopis.com/scripts, GPL2+
+/help
+}
+version() { help |sed '$!d'; }
+
+we_have() { type "$@" >/dev/null 2>&1; }
+die() { echo "$*" >&2; exit 2; }
+
+if ! we_have mplayer; then
+  if we_have mplayer2
+    then mplayer() { mplayer2 ${1+"$@"}; }
+    else die "This script requires mplayer"
+  fi
+fi
+
+is_media() {
+  file "$1" |sed 's/^[^:]*://' |grep -i -e audio -e video -e movie \
+    -e matroska -e mpeg -e quicktime -e mp4 -e h264 -e midi -e webm >/dev/null
+}
+
+LONG=0
+
+while getopts lhqvV-: arg; do
+  case $arg in
+    h )    help; exit 0 ;;
+    [lv] ) LONG=1 ;;
+    q )    QUIET=1 ;;
+    V )    version; exit 0 ;;
+    - )    OA="${OPTARG#*=}"
+           case $OPTARG in
+             help* )		help; exit 0 ;;
+             long*|versi* )	LONG=1 ;;
+             quiet* )		QUIET=1 ;;
+             ver|vers* )	version; exit 0 ;;
+             * )		die "Illegal option --$OPTARG ... Try --help" ;;
+           esac ;;
+    \?)    die "Try --help" ;;
+  esac
+done
+shift $((OPTIND-1))
+
+details_loop() {
+  total_time=0
+  total_size=0
+  #total_pix=0
+
+  title="Seconds^Time^Size^Name^kbps^MB/min^Audio^Video^xSD^Qual"
+
+  for movie in "$@"; do
+    # directory - only include if it contains ONE 160+ MB file
+    if [ -d "$movie" ]; then
+      movie=`find "$movie" -size +160M`
+      if ! [ -s "$movie" ]; then continue; fi
+    fi
+    if ! [ -e "$movie" ]; then # doesn't exist: steal error from 'file'
+      file "$movie" |sed "s/^[^:]*/${0##*/}/" >&2
+      continue
+    fi
+
+    unset ID_AUDIO_CODEC ID_VIDEO_CODEC ID_LENGTH \
+          ID_VIDEO_WIDTH ID_VIDEO_HEIGHT
+    eval $(mplayer -vo null -ao null -forceidx -frames 0 -identify "$movie" \
+            2>/dev/null |sed '/^ID_/!d; s/[]()|&;<>`'"'"'\\!$" []/\\&/g')
+
+    audio="${ID_AUDIO_CODEC:-none}"
+    video="${ID_VIDEO_CODEC:-none}"
+    audio="${audio#ff}"
+    audio="${audio%float}"
+    video="${video#ff}"
+
+    time="${ID_LENGTH:-0}"
+    tc=`echo |awk '{ printf "%.0f",'"$time"' }'` # round time to integer
+    if ! [ "$tc" -gt 0 ] 2>/dev/null; then
+      is_media "$movie" || continue
+    fi
+    size=`du -sk "$movie" |awk '{print $1}'`
+
+    if [ -n "$LONG" ]; then
+
+      if [ "$((tc*ID_VIDEO_WIDTH*ID_VIDEO_HEIGHT))" -gt 0 ] 2>/dev/null; then
+        pix=`echo |awk '{ printf "%.2f", '"
+              $ID_VIDEO_WIDTH * $ID_VIDEO_HEIGHT / (640 * 480)
+            }"`
+        else pix=0
+      fi
+      #total_pix=$((total_pix+${pix%%.*}))
+
+      if [ -z "$total_audio" ]
+        then total_audio="$audio"
+        elif [ "$total_audio" != "$audio" ]
+          then total_audio=mixed
+      fi
+      if [ -z "$total_video" ]
+        then total_video="$video"
+        elif [ "$total_video" != "$video" ]
+          then total_video=mixed
+      fi
+
+      if [ "$movie" != "${movie%.[Mm][Kk][Vv]}" ] && we_have mkvinfo; then
+        tracks=`mkvinfo "$movie" 2>/dev/null |grep -c "Audio track"`
+        if [ $tracks -gt 1 ]; then
+          audio="$tracks@$audio"
+        fi
+      fi
+
+    fi
+
+    total_time=$((total_time+tc))
+    total_size=$((total_size+size))
+
+    if [ "$tc" = 0 ] && [ "$size" -gt 62 ]
+      then tc="?"
+      elif we_have timecalc
+        then tc=`timecalc $tc`
+    fi
+    if [ -n "$title" ] && [ -z "$QUIET" ]; then echo "$title"; unset title; fi
+    echo "$time^$tc^$size^$movie^0^0^$audio^$video^$pix"
+  done
+
+  # print a summary if there was more than one file
+  if [ "$total_size" -gt "${size:-1}" ] && [ -z "$QUIET" ]; then
+    we_have timecalc && tc=`timecalc $total_time` || tc="$total_time"
+    #echo "$total_time^$tc^$total_size^(overall)^ ^ ^ ^ ^$total_pix"
+    echo "$total_time^$tc^$total_size^(overall)^ ^ ^$total_audio^$total_video^-"
+  fi
+}
+
+[ $# = 1 ] && [ -d "$1" ] && cd "$1" && shift
+[ $# = 0 ] && set -- *
+details_loop "$@" |awk -F^ '
+ BEGIN { retval = 1; }
+ function squish(num) {
+   if (num >= 100) {
+     num = sprintf("%.0f", num);
+   } else { if (num >= 10) {
+     num = sprintf("%.1f", num);
+   } else { if (num > 0) {
+     num = sprintf("%.2f", num);
+   } else {
+     num = "-";
+   } } }
+   return num;
+ }
+ $3 > 10 && $2 != "Time" {
+   for ( i=1; i<=NF; i++) { $i == " " && $i = ""; }
+
+   if ( $1 == 0 ) {
+     $5 = "?";
+     $6 = $5;
+   } else {
+     $5 = sprintf("%d", $3*8/$1);
+     $6 = squish($3*60/1024/$1);
+   }
+
+   $10 = "-";
+   if ($9 > 0) {
+     rate = $6;
+     tracks = $7;
+     gsub(/@.*/,"",tracks);
+     if (tracks) {
+       tracks--;
+       rate -= tracks * 64 * 60/8/1024; # ASSUME extra audio tracks are 64kbps
+     }
+     if ($7 ~ /ac3/) { rate -= 224 * 60/8/1024; } # assume AC3=384kbps, std=160
+
+     # Assumptions about quality differences between codecs,
+     # last updated from http://keyj.emphy.de/video-encoder-comparison/
+     # (using SSIM graph at 1000kbps, eval dated 2010-02), see also
+     #http://www2.tkn.tu-berlin.de/research/evalvid/EvalVid/vp8_versus_x264.html
+
+     # codec quality at xSD 0.875 converges between 1500 and 2000 kbps
+     if (rate / $9 < 1500 * 60/8/1024 / 0.875) { # equiv: (rate * 10 / $9 < 126)
+       vid = tolower($8); # cannot do /foo/i
+       if          (vid ~ /h264/) {	rate *= .982; # assuming high
+       } else { if (vid ~ /vp8|webm/) {	rate *= .976; # assuming == x264.base
+       } else { if (vid ~ /xvid/) {	rate *= .974;
+       } else { if (vid ~ /divx/) {	rate *= .972; # theora < divx < xvid
+       } else { if (vid ~ /theora/) {	rate *= .971;
+       } else { if (vid ~ /mpeg2/) {	rate *= .965;
+       } else { if (vid ~ /dirac/) {	rate *= .949;
+       } else { 			rate *= .97;
+     } } } } } } } }
+     $10 = sprintf("%.0f", rate*10/$9);
+   }
+   $9 = squish($9);
+
+   if ( $3 > 1024^3 ) {
+     $3 = sprintf("%4.2fT", $3/1024^3);
+   } else { if ( $3 > 1024^2 ) {
+     $3 = sprintf("%4.2fG", $3/1024^2);
+   } else { if ( $3 > 1024 ) {
+     $3 = sprintf("%4.2fM", $3/1024);
+   } else {
+     $3 = sprintf("%4.2fk", $3);
+   } } }
+
+   $1 = sprintf("%5.1f", $1);
+   retval = 0;
+ }
+ {
+   if ( '$LONG' ) {
+     printf "%9s%7s%7s%8s%5s%7s%6s%5s%9s  %s\n", $2,$7,$8,$1,$5,$6,$9,$10,$3,$4;
+   } else {
+     printf "%9s%5s%7s%5s%9s  %s\n", $2,$5,$6,$10,$3,$4;
+   }
+ } END { exit retval; }'
+
