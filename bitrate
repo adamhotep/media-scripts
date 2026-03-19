@@ -31,7 +31,7 @@ A part of media-scripts, https://github.com/adamhotep/media-scripts
 }
 
 version() {
-  echo "bitrate 2.0.20260315.0 Copyright 2010+ by Adam Katz, GPLv2+"
+  echo "bitrate 2.0.20260318.0 Copyright 2010+ by Adam Katz, GPLv2+"
   mediainfo_version="$(mediainfo --version 2>/dev/null |sed '/ - v/!d;s// /')"
   jq_version="$(jq --version 2>/dev/null |tr - ' ')"
   mediainfo_version="${mediainfo_version:-MediaInfo (needs installation)}"
@@ -97,13 +97,6 @@ needs_num() {
     die "$self: -$O$OPT needs a positive integer argument"
   fi
 }
-
-# Race condition bug in dash < 0.5.12. Use bash if we have it and lack pipefail
-# (we have a workaround compatible with older dash below, but it adds a delay)
-if we_have bash && [ -z "$BASH_VERSION" ] \
-&& ! (eval 'set -o pipefail' 2>/dev/null); then
-  exec bash --posix "$0" "$@"
-fi
 
 
 # defaults
@@ -393,44 +386,40 @@ fi
 # swap dollar signs (per-row data) for dots (aggregate data)
 totals="$(echo "$fields" |sed 's/[$]/./g')"
 
-# create file descriptors for redirection (to save exit codes & error output)
-fifo() {
-  local f="$(mktemp -u 2>/dev/null || echo "${TMPDIR:-/tmp}/bitrate-$1.$$")"
-  mkfifo "$f"
-  echo "$f"
-}
-find_status="$(fifo find_status)"
-jq_status="$(fifo jq_status)"
-errors="$(fifo errors)"
-trap 'rm -f "$find_status $jq_status" "$errors"' EXIT INT TERM HUP
-
-# filter errors to identify this script rather than find
-sed "s/^[^:]*: /$self: /" <"$errors" >&2 &
-sed_id=$?
+# Error codes can't be collected from this pipeline with variables.
+# Instead, we invoke signals and trap them to set the errors.
+# This trick loses the actual error codes (which for find seems to be the same),
+# but it is the cleanest way to set variables from within subshells. No FIFOs!
+# Via https://stackoverflow.com/a/76548359/519360
+export find_exit=0 jq_exit=0
+trap find_exit=1 USR1
+trap jq_exit=1 USR2
 
 # this odd nesting is needed in order to capture exit codes and find's stderr
 {
-  {
-    # yes, this introduces a bug when filenames contain newlines. don't do that!
-    if [ "$depth" = "-maxdepth 0" ] \
-    || [ "$no_sort $no_dirs $depth" = "no_sort no_dirs -maxdepth 1" ]; then
-      printf '%s\n' "$@"
-    else
-      find $follow_links "${@:-.}" $depth -not -type d $no_linkdirs -print \
-        2>"$errors"
-    fi
-    echo $? >"$find_status"	# save the exit code from find
-  } |sorter | {
-    read in || exit $ret	# do not send empty data to mediainfo
-    # we just read in the first line. { print it and the rest } into awk,
-    # which sheds the leading dot on the auto-added './' (for no args)
-    # and null-delimits the list for xargs to then send to mediainfo
-    { printf '%s\n' "$in"; cat; } |awk -v shed_dot=$shed_dot '
-      shed_dot == "shed_dot" && 1 == index($0, "./") { $0 = substr($0, 3) }
-      { printf "%s%c", $0, 0 }
-    ' |xargs -0 mediainfo --full --output=JSON
-  } | {
-    jq -cr --argjson quiet "\"$quiet\"" --argjson title "[ $title ]" '
+  # yes, this introduces a bug when filenames contain newlines. don't do that!
+  if [ "$depth" = "-maxdepth 0" ] \
+  || [ "$no_sort $no_dirs $depth" = "no_sort no_dirs -maxdepth 1" ]; then
+    printf '%s\n' "$@"
+  else
+    exec 3>&1	# open FD 3 and send it to STDOUT (FD 1)
+    # find's STDOUT (FD 1) -> FD 3, which is held, find's STDERR (FD 2) -> FD 1,
+    # sed alters FD 1 (find's STDERR) -> FD 2 (STDERR), FD 3 is still held.
+    # When the if/then/else subshell returns FD 3 to STDOUT, grep can see it.
+    find $follow_links "${@:-.}" $depth -not -type d $no_linkdirs -print \
+      2>&1 1>&3 3>&- |sed "s/^[^:]*: /$self: /" >&2 3>&-
+  fi |LC_ALL=C grep ^ || kill -s USR1 $$	# no output means find erred
+} |sorter | {
+  read in || exit $ret	# do not send empty data to mediainfo
+  # we just read in the first line. { print it and the rest } into awk,
+  # which sheds the leading dot on the auto-added './' (for no args)
+  # and null-delimits the list for xargs to then send to mediainfo
+  { printf '%s\n' "$in"; cat; } |awk -v shed_dot=$shed_dot '
+    shed_dot == "shed_dot" && 1 == index($0, "./") { $0 = substr($0, 3) }
+    { printf "%s%c", $0, 0 }
+  ' |xargs -0 mediainfo --full --output=JSON
+} | {
+  jq -cr --argjson quiet "\"$quiet\"" --argjson title "[ $title ]" '
 
 # TIP: If viewing this in vim, try `set ft=jq` when reviewing the jq code
 
@@ -691,19 +680,8 @@ foreach $all[] as $row (
 
 # end JQ code
 #####################################
-    '
-    echo $? >"$jq_status"	# save the exit code from jq
-  } | out
-  kill -HUP $sed_id
-} &
-
-read find_exit < "$find_status"
-# workaround for bug in dash < 5.12, which we can detect with this command
-(eval 'set -o pipefail' 2>/dev/null) || sleep 0.7 2>/dev/null || sleep 1
-read jq_exit < "$jq_status"
-wait
-find_exit="${find_exit:-123}"	# default (an error), likely unnecessary
-jq_exit="${jq_exit:-123}"	# default (an error), likely unnecessary
+  ' || kill -s USR2 $$
+} | out
 
 # exit with the higher (worse) exit code from find or jq
 exit $(( $find_exit > $jq_exit ? $find_exit : $jq_exit ))
