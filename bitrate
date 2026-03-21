@@ -31,7 +31,7 @@ A part of media-scripts, https://github.com/adamhotep/media-scripts
 }
 
 version() {
-  echo "bitrate 2.0.20260318.0 Copyright 2010+ by Adam Katz, GPLv2+"
+  echo "bitrate 2.0.20260321.0 Copyright 2010+ by Adam Katz, GPLv2+"
   mediainfo_version="$(mediainfo --version 2>/dev/null |sed '/ - v/!d;s// /')"
   jq_version="$(jq --version 2>/dev/null |tr - ' ')"
   mediainfo_version="${mediainfo_version:-MediaInfo (needs installation)}"
@@ -444,8 +444,11 @@ def padr(decimals):
 def sec2time:
   ( tonumber? | round |
     (if . >= 86400 then (. / 86400 | floor |tostring) + "d " else "" end) # days
-    + (if . >= 3600 then (. / 3600 | floor |tostring) + ":" else "" end) # hours
-    + (. / 60 % 60 | floor | pad0(2; . >= 3600))	# minutes
+    + (if . >= 3600 then	# hours:minutes
+        (. / 3600 | floor | tostring) + ":" + (. / 60 % 60 | floor | pad0(2))
+      else			# just minutes
+        (. / 60 % 60 | floor | tostring)
+      end)
     + ":" + (. % 60 | pad0(2))	# seconds
   ) | pad(8);	# width=8 fits "23:59:59"; only an issue with --stream or BSD
 def time2sec:
@@ -473,6 +476,9 @@ def same_or_mixed:
   # strip off the leading track count (if present) first
   map(sub("^[0-9]+@"; "")) |
   if unique | length == 1 then .[0] else "mixed" end;
+
+def clean_codecname:
+  gsub("\\s+"; "_") | gsub("[^[:alnum:]](Audio|Video)"; "");
 
 # end setup }}}
 
@@ -570,7 +576,7 @@ foreach $all[] as $row (
   # TODO (maybe): parse each stream, report "mixed" at the top level if mixed
   # ... I am not sure I want that; showing the first default seems better
   # (and they will be the same most (99%?) of the time)
-  (($audio_part.Format // "none") | gsub("\\s+"; "_")) as $acodec |
+  (($audio_part.Format // "none") | clean_codecname) as $acodec |
   ((if $astreams > 1 then ($astreams | tostring) + "@" else "" end)
     + $acodec) as $audio |
   .audio //= $acodec |
@@ -586,18 +592,20 @@ foreach $all[] as $row (
   end) as $vstreams |
   .vstreams += $vstreams |
 
-  (if  $video_part | length > 0 then ($video_part.Format // "uknown")
-  elif $image_part | length > 0 then ($image_part.Format // "uknown")
+  (if  $video_part | length > 0 then ($video_part.Format // "unknown")
+  elif $image_part | length > 0 then ($image_part.Format // "unknown")
   else "none"
-  end | gsub("\\s+"; "_") | gsub("[^[:alnum:]]Video"; "")) as $vcodec |
+  end | clean_codecname) as $vcodec |
   ((if $vstreams > 1 then ($vstreams | tostring) + "@" else "" end)
     + $vcodec) as $video |
   .video //= $vcodec |
   if .video != $vcodec then .video = "mixed" else . end |
   .vcodec = .video |
 
-  ($general_part.OverallBitRate // ($bytes / $seconds_raw)
-    | tonum_or(0) / 1024) as $kbps_raw |
+  (if $seconds_raw > 0 then
+    ($general_part.OverallBitRate // ($bytes / $seconds_raw)
+      | tonum_or(0) / 1024)
+  else 0 end) as $kbps_raw |
 
   ($kbps_raw | round) as $kbps |
 
@@ -635,7 +643,7 @@ foreach $all[] as $row (
   # NOTE! Density now tries to account for JUST the video content.
   # See above how $vbps is just for video (we subtract an assumed 128kbps
   # for audio if we have to fall back to the overall bitrate)
-  (if $xSD_raw == "-" then "-"
+  (if ($xSD_raw | type != "number") or $xSD_raw == 0 then "-"
   else ($vbps * 60 / 8 / 1048576 / $xSD_raw * 10)
   end) as $dens |
   if $dens != "-" then .dens += $dens * $seconds_raw else . end |
@@ -659,8 +667,10 @@ foreach $all[] as $row (
     .file	= ("(total across " + (.name | tostring) + " files)") |
     .fps	= (if .vsec > 0 and (.fps | type == "number") then
     		    (.fps / .vsec) | padr(3) else .fps // "-" end) |
-    .kbps	= (.bytes / .seconds * 8 / 1024 | round) |
-    .mBpm	= (.bytes * 60 / 1048576 / .seconds | padr(2)) |
+    .kbps	= if .seconds > 0 then
+    		    (.bytes / .seconds * 8 / 1024 | round) else 0 end |
+    .mBpm	= if .seconds > 0 then
+    		    (.bytes * 60 / 1048576 / .seconds | padr(2)) else 0 end |
     .ms 	= (.seconds * 1000 | round) |
     .name	= .file |
     .seconds_raw = .seconds |
