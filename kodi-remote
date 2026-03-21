@@ -4,10 +4,11 @@ Usage: kodi-command [OPTIONS] COMMAND|JSON
    or: kodi-command [OPTIONS] METHOD [PARAM]
 
 Options:
-  -c FILE  Configuration file (default: \`$api_creds\`)
-           For further info, run \`${0##*/} --config-help\`
-  -q       Make output quieter, -qq also suppresses response JSON
-  -u URL   The kodi control URL (default: \`url\` value from config file)
+  -c FILE     Configuration file (default: \`$api_creds\`)
+              For further info, run \`${0##*/} --config-help\`
+  --insecure  Accept insecure/invalid/expired SSL certificates
+  -q          Make output quieter, -qq also suppresses response JSON
+  -u URL      The kodi control URL (default: \`url\` value from config file)
 
 Command aliases:
   clean, clean-audio    Clean library: VideoLibrary.Clean or AudioLibrary.Clean
@@ -23,7 +24,7 @@ This requires you to have enabled the web server
 Docs for JSON, methods, and parameters: $api_link
 
 A part of media-scripts, https://github.com/adamhotep/media-scripts
-kodi-remote 0.2.20240701.0 copyright 2021+ by Adam Katz, GPLv2+
+kodi-remote 0.3.20260321.0 copyright 2021+ by Adam Katz, GPLv2+
 /help
   exit
 }
@@ -57,6 +58,7 @@ qq='"'
 
 # defaults
 api_creds="$HOME/.kodi/.api_creds"
+insecure=
 url=
 quiet=0
 
@@ -73,6 +75,7 @@ while getopts c:hqu:v-: OPT; do
   case $OPT in
     ( c* )  if [ -z "$OPTARG" ]; then api_file_help; fi; api_creds="$OPTARG" ;;
     ( h* )  help ;;
+    ( insecure* ) insecure='--insecure' ;;
     ( q* )  quiet=$(( quiet + 1 )) ;;
     ( u* )  needs_arg; url="$OPTARG" ;;
     ( v* )  quiet=$(( quiet - 1 )) ;;
@@ -95,7 +98,7 @@ kodi_json_cmd() {
     ( 1 ) silent='--silent' ;;
     ( * ) silent='--silent --output /dev/null' ;;
   esac
-  curl --config "$api_creds" $silent --request POST \
+  curl $insecure --config "$api_creds" $silent --request POST \
     --header "content-type:application/json" --data "$*" ${url:+"$url"}
 }
 
