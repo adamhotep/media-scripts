@@ -5,7 +5,7 @@ help() { cat <</help
 Get bitrate statistics on given media files
 Usage: $self [OPTIONS] [FILE|DIR...]
   -a, --audio-only     Suppress video columns (incompatible with -f & --most)
-  --color[=WHEN]      Color/style the output: always, auto (default), never
+  --color[=WHEN]       Color/style the output: always, auto (default), never
   -d, --max-depth=NUM  Traverse recursively up to depth NUM (default = 1)
   -f, --fields=CSV     Use CSV for the fields to output (see --help-fields)
   --follow             Follow symlinks (implied by -R/--recursive=all)
@@ -23,20 +23,19 @@ Usage: $self [OPTIONS] [FILE|DIR...]
                        human-units, month, numeric, reverse, version
   -t, --truncate       Truncate output to the viewport width (\$COLUMNS)
   -T, --truncate=NUM   Truncate output to NUM (default=0, no truncation)
-  -V, --version        Show version info for $self and its dependencies
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
 /help
-  exit
+  version
 }
 
 version() {
-  echo "bitrate 2.0.20260321.0 Copyright 2010+ by Adam Katz, GPLv2+"
   mediainfo_version="$(mediainfo --version 2>/dev/null |sed '/ - v/!d;s// /')"
   jq_version="$(jq --version 2>/dev/null |tr - ' ')"
   mediainfo_version="${mediainfo_version:-MediaInfo (needs installation)}"
   jq_version="${jq_version:-jq (needs installation)}"
-  echo "powered by $mediainfo_version, parsed by $jq_version"
+  echo "Wraps $mediainfo_version as parsed by $jq_version"
+  echo "Part of media-scripts, https://github.com/adamhotep/media-scripts"
+  echo "bitrate 2.0.20260719.0 copyright 2010+ by Adam Katz, GPLv3+"
   exit
 }
 
@@ -251,7 +250,7 @@ if [ "$stream" = condense ]; then
       column -o " " -t -l$fieldcount --table-right=$right_align
     }
   elif we_have columns; then	# in https://github.com/adamhotep/misc-scripts
-    columns() { command columns -s; }
+    columns() { sed 's/^ *//' |command columns -s; }
   elif we_have column; then	# BSD
     columns() { column -ts '	'; }
   else
