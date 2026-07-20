@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version="1.1.0.20210912"
+version="1.1.20210912.1"
 
 help() { cat <</help
 Usage: isosuck [DVD Title] [DVD DEVICE]
@@ -9,8 +9,8 @@ DVD Title will default to the volume ID of the DVD
 Output will be <DVD Title>.iso
 DVD DEVICE will default to /dev/dvd
 
-isosuck $version Copyright 2010+ by Adam Katz, GPLv2
-Learn more at https://github.com/adamhotep/media-scripts
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+isosuck $version copyright 2010+ by Adam Katz, GPLv3+
 /help
   exit
 }

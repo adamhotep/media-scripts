@@ -11,8 +11,8 @@ Usage: ${0##*/} [OPTIONS] [USER@][ssh://]HOST:PATH
 
 All other OPTIONS are passed to mpv. See also \`ssh --help\` and \`mpv --help\`.
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
-mpvssh 0.3.20240704.0 copyright 2020+ by Adam Katz, GPLv2+
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+mpvssh 0.3.20240704.1 copyright 2020+ by Adam Katz, GPLv3+
 /help
 }
 

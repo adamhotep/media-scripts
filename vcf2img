@@ -3,8 +3,8 @@ help() { cat <</help
 Dump images (if any) from given VCARD data to files in the current directory.
 Usage: vcf2img [--update] [FILE...]
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
-vcf2img 0.1.20240608.0 Copyright 2024+ by Adam Katz, GPLv2+
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+vcf2img 0.1.20240608.1 copyright 2024+ by Adam Katz, GPLv3+
 /help
 }
 

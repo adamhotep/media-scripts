@@ -7,8 +7,8 @@ Usage: chapters [OPTIONS] [FILE...]
 
 Now also displaying the number of video, audio, and text tracks.
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
-chapters v0.6.20220814 copyright 2010+ by Adam Katz, GPLv2+
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+chapters v0.6.20220814.1 copyright 2010+ by Adam Katz, GPLv3+
 /help
 exit
 }

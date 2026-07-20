@@ -11,8 +11,8 @@ Usage: ${0##*/} [OPTIONS] [CODEC [CODEC_OPTIONS]] FILE...
 CODEC defaults to \`copy\`. Transcode with \`libopus\`
 CODEC_OPTIONS are passed to FFMPEG after the \`-c:a CODEC\`
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
-media2opus 0.3.20240815.0 copyright 2021+ by Adam Katz <@adamhotep>, GPL
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+media2opus 0.3.20260322.0 copyright 2021+ by Adam Katz, GPLv3+ / Apache 2.0
 /help
   exit
 }
@@ -52,7 +52,8 @@ for f in "$@"; do
   out="$prefix${f%.*}.$ext"
   if [ -s "$f" ] && [ "$out" != "$f" ]; then
     # -map_metadata is new, from https://superuser.com/q/1235939/300293
-    $noop ffmpeg -i "$f" -vn -map_metadata 0:s:a:0 -c:a "${args[@]}" "$out" \
+    # $noop ffmpeg -i "$f" -vn -map_metadata 0:s:a:0 -c:a "${args[@]}" "$out" \
+    $noop ffmpeg -i "$f" -vn -map_metadata 0 -c:a "${args[@]}" "$out" \
       && $noop touch --reference="$f" "$out" >/dev/null 2>&1
   fi
 done

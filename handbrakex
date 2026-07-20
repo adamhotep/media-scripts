@@ -9,7 +9,7 @@ use warnings;
 # HandBrakeCLI itself can't deal with combined single-dash arguments.
 
 my $name = 'handbrakex';
-my $ver = $name.' 0.3+20151230 by Adam Katz, licensed under the GNU GPL v2+';
+my $ver = $name.' 0.3.20151230.1 by Adam Katz, GPLv3+';
 my $HANDBRAKE = "HandBrakeCLI";
 
 sub do_help {
@@ -32,8 +32,8 @@ Usage: $name [options] -o <file>
 Multiple presets may be used. Repeated options override previous options,
 including within --encopts/-x strings.  See --option-example for more detail.
 
+Part of media-scripts, https://github.com/adamhotep/media-scripts
 $ver
-Learn more at https://github.com/adamhotep/media-scripts
 end_help
 }
 

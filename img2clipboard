@@ -19,8 +19,8 @@ $usage
 }
 
 version() {
-  echo "A part of media-scripts, https://github.com/adamhotep/media-scripts"
-  echo "img2clipboard 0.1.20200722.1 copyright 2020+ by Adam Katz, GPLv2+"
+  echo "Part of media-scripts, https://github.com/adamhotep/media-scripts"
+  echo "img2clipboard 0.1.20200722.2 copyright 2020+ by Adam Katz, GPLv3+"
   exit
 }
 

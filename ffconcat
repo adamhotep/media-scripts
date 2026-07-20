@@ -19,8 +19,8 @@ This uses the ffmpeg concat demuxer to concatenate movies without reencoding.
 Each movie must have the same streams (codecs, dimensions, time base, etc).
 See more at https://ffmpeg.org/ffmpeg-formats.html#concat
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
-ffconcat v0.4.20241105.0 copyright 2022+ by Adam Katz, GPLv2+
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+ffconcat v0.4.20241105.1 copyright 2022+ by Adam Katz, GPLv3+
 /help
 }
 

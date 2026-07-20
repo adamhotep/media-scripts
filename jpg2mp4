@@ -17,8 +17,8 @@ Usage: jpg2mp4 [OPTIONS] MOTION_PHOTO [VIDEO] [MOTION_PHOTO [VIDEO]...]
                         (Overridden when VIDEO is specified afet a MOTION_PHOTO
   -Z, -0, --null        As \`-l\` but null-delimit the list (for \`xargs -0\`)
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
-jpg2mp4 0.3.20240820.0 copyright 2022+ by Adam Katz, GPLv2+
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+jpg2mp4 0.3.20240820.1 copyright 2022+ by Adam Katz, GPLv3+
 /help
 }
 

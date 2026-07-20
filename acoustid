@@ -25,7 +25,7 @@ for (split(":", $ENV{PATH})) {
 }
 
 my $name =	"acoustid-lookup";
-my $version =	"1.1.20230423.0";
+my $version =	"1.1.20230423.1";
 my $one_liner = "Identify audio files by their AcoustID fingerprints.";
 my $usage =	"Usage: $command [OPTIONS] FILE [FILE...]";
 
@@ -50,14 +50,14 @@ For a larger list, use xargs.  Here are two examples:
     find ... -print0 |xargs -0 $command
     cat list-of-songs.m3u |xargs -d '\\n' $command
 
-A part of media-scripts, https://github.com/adamhotep/media-scripts
 end_help
 
   do_version();
 }
 
 sub do_version {
-  print "$name $version Copyright 2014+ by Adam Katz, LGPLv2.1+\n";
+  print "Part of media-scripts, https://github.com/adamhotep/media-scripts\n";
+  print "$name $version copyright 2014+ by Adam Katz, LGPLv2.1+\n";
 }
 
 sub do_license {

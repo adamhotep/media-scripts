@@ -5,8 +5,8 @@ Reads or calculates and then displays FPS for each stream in given movie(s)
 
 Streams are identified by their codec.  Some audio codecs have "frames" too.
 
-A part of media-scripts,  https://github.com/adamhotep/media-scripts
-framerate v0.3+20160103 copyright 2010+ by Adam Katz, GPL
+Part of media-scripts, https://github.com/adamhotep/media-scripts
+framerate 0.3.20160103.1 copyright 2010+ by Adam Katz, GPLv3+
 /help
 exit
 }
