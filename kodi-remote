@@ -23,8 +23,8 @@ This requires you to have enabled the web server
   Settings -> Services -> Control -> Allow remote control via HTTP
 Docs for JSON, methods, and parameters: $api_link
 
-Part of media-scripts, https://github.com/adamhotep/media-scripts
-kodi-remote 0.3.20260321.1 copyright 2021+ by Adam Katz, GPLv3+
+A part of media-scripts, https://github.com/adamhotep/media-scripts
+kodi-remote 0.3.20260528.0 copyright 2021+ by Adam Katz, GPLv2+
 /help
   exit
 }
@@ -181,9 +181,15 @@ kodi_play() {
   fi
 }
 
+kill_kodi() {
+  export DISPLAY=
+  exec sudo killall -9 kodi.bin kodi
+}
+
 
 case "$1" in
   ( help )				help ;;
+  ( kill )				kill_kodi ;;
 
   # Aliases for common commands
   ( aplay | aplaypause | apause )	kodi_play 0 ;;
