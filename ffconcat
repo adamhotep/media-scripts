@@ -2,11 +2,12 @@
 help() { cat <</help
 Concatenate given movies with ffmpeg, with chapters marking their original parts
 Usage: ffconcat [OPTIONS] MOVIE1 MOVIE2... OUTPUT
-  -F OPT, --ffmpeg Provide FFMPEG option (spaces will be lost, multiples okay)
-  -n NAME, --name  Use NAME rather than the metadata title or filename.
-                   You can use this multiple times to name each chapter.
-                   The last one will be used for all remaining chapters.
-  -q, --quiet      Show only warnings & errors. -qq: no warnings, -qqq: nothing
+  -C, --no-chapters Do not create chapters
+  -F OPT, --ffmpeg  Provide FFMPEG option (spaces will be lost, multiples okay)
+  -n NAME, --name   Use NAME rather than the metadata title or filename.
+                    You can use this multiple times to name each chapter.
+                    The last one will be used for all remaining chapters.
+  -q, --quiet       Show only warnings & errors. -qq: no warnings, -qqq: nothing
 
 NAME may contain a few variables (sorry, no escape character is supported):
   %CHAPTER%  The chapter number
@@ -20,7 +21,7 @@ Each movie must have the same streams (codecs, dimensions, time base, etc).
 See more at https://ffmpeg.org/ffmpeg-formats.html#concat
 
 Part of media-scripts, https://github.com/adamhotep/media-scripts
-ffconcat v0.4.20241105.1 copyright 2022+ by Adam Katz, GPLv3+
+ffconcat v0.4.20260831.0 copyright 2022+ by Adam Katz, GPLv3+
 /help
 }
 
@@ -33,13 +34,15 @@ FS='\034'
 die() { echo "$*" >&2; exit 2; }  # complain to STDERR and exit with error
 needs_arg() { if [ -z "$OPTARG" ]; then die "No arg for --$OPT option"; fi; }
 
+chapters=1
 name=''
 quiet=0
-while getopts F:hn:qv-: OPT; do
+while getopts CF:hn:qv-: OPT; do
   if [ "$OPT" = - ]; then # --option https://stackoverflow.com/a/28466267/519360
     OPT="${OPTARG%%=*}" OPTARG="${OPTARG#$OPT}" OPTARG="${OPTARG#=}"
   fi
   case "$OPT" in
+    ( C | no*chap* )	chapters=0 ;;
     ( F | ffmpeg* )	needs_arg; ffmpeg_opts="$ffmpeg_opts $OPTARG" ;;
     ( h | help )	help; exit ;;
     # truncate at FS to prevent shenanigans. it's not printable anyway.
@@ -73,7 +76,7 @@ fi
 tmp="$(mktemp -d)"
 trap "sleep 90; rm -rf $tmp" 0 1 2 5 9 11 15 18
 
-output="$(eval echo '$'$#)"	# the final argument (yes, a safe eval call)
+eval output="\${$#}"		# the final argument (yes, a safe eval call)
 i=1
 
 for file in "$@"; do
@@ -101,7 +104,7 @@ for file in "$@"; do
   movie="${file##*/}"			# no path
   echo "FILE:title=${movie%.*}" 	# metadata label, no extension
   i=$((i+1))
-done |awk -v FS="$FS" -v rate=1000000 -v name_str="$name" '
+done |awk -v FS="$FS" -v rate=1000000 -v name_str="$name" -v chapters="$chapters" '
   BEGIN {
     print ";FFMETADATA1"
     if (name_str) { names_len = split(name_str, names, FS) } # make names array
@@ -132,13 +135,15 @@ done |awk -v FS="$FS" -v rate=1000000 -v name_str="$name" '
     # make colliding chapter names more informative by appending the chapter #
     else if (title_seen[title]++) { title = title "(" title_seen[title] ")" }
 
-    printf "[CHAPTER]\nTIMEBASE=1/%d\nSTART=%.0f\n", rate, total
-    total += duration * rate
-    printf "END=%.0f\n", total - 1
-    printf "title=%s\n\n", title
+    if (chapters) {
+      printf "[CHAPTER]\nTIMEBASE=1/%d\nSTART=%.0f\n", rate, total
+      total += duration * rate
+      printf "END=%.0f\n", total - 1
+      printf "title=%s\n\n", title
+    }
   }
 ' > "$tmp/metadata"
 
 ffmpeg $quiet -analyzeduration 10000000 -probesize 10000000 \
       -f concat -safe 0 $ffmpeg_opts -i "$tmp/list.txt" -i "$tmp/metadata" \
-      -map 0 -map_metadata 1 -map_chapters 1 -c copy "$output"
+      -map 0 -map_metadata 1 -map_chapters $chapters -c copy "$output"
